@@ -935,6 +935,18 @@ func (c *Context) FromIntSlice(s []int32, shape ...int) ml.Tensor {
 	return t
 }
 
+func (c *Context) FromInt64Slice(s []int64, shape ...int) ml.Tensor {
+	checkShape(s, shape...)
+
+	t := c.newTensor(ml.DTypeI64, shape)
+
+	if c.b.allocMemory && len(s) > 0 {
+		C.ggml_backend_tensor_set(t.(*Tensor).t, unsafe.Pointer(&s[0]), 0, C.ggml_nbytes(t.(*Tensor).t))
+	}
+
+	return t
+}
+
 func (c Context) Arange(start, stop, step float32, dtype ml.DType) ml.Tensor {
 	switch dtype {
 	case ml.DTypeF32:
@@ -1036,6 +1048,8 @@ func (t *Tensor) DType() ml.DType {
 		return ml.DTypeQ80
 	case C.GGML_TYPE_Q4_0:
 		return ml.DTypeQ40
+	case C.GGML_TYPE_I64:
+		return ml.DTypeI64
 	case C.GGML_TYPE_I32:
 		return ml.DTypeI32
 	case C.GGML_TYPE_MXFP4:
@@ -1055,6 +1069,8 @@ func ggmlDType(dtype ml.DType) uint32 {
 		return C.GGML_TYPE_Q8_0
 	case ml.DTypeQ40:
 		return C.GGML_TYPE_Q4_0
+	case ml.DTypeI64:
+		return C.GGML_TYPE_I64
 	case ml.DTypeI32:
 		return C.GGML_TYPE_I32
 	case ml.DTypeMXFP4:
@@ -1254,6 +1270,13 @@ func (t *Tensor) Rows(ctx ml.Context, t2 ml.Tensor) ml.Tensor {
 	return &Tensor{
 		b: t.b,
 		t: C.ggml_get_rows(ctx.(*Context).ctx, t.t, t2.(*Tensor).t),
+	}
+}
+
+func (t *Tensor) SetRows(ctx ml.Context, t2 ml.Tensor, t3 ml.Tensor) ml.Tensor {
+	return &Tensor{
+		b: t.b,
+		t: C.ggml_set_rows(ctx.(*Context).ctx, t.t, t2.(*Tensor).t, t3.(*Tensor).t),
 	}
 }
 

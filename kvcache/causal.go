@@ -49,7 +49,7 @@ type Causal struct {
 	curLayer int
 
 	// starting location for data storage for this batch
-	curLoc int
+	curLoc ml.Tensor
 
 	// size of the current batch
 	curBatchSize int
@@ -204,15 +204,12 @@ func (c *Causal) StartForward(ctx ml.Context, batch input.Batch, reserve bool) e
 	c.curPositions = batch.Positions
 	c.opts.Except = nil
 
+	var indicies []int64
 	if !c.curReserve {
 		c.updateSlidingWindow()
 
 		var err error
-		c.curLoc, err = c.findStartLoc()
-		if errors.Is(err, ErrKvCacheFull) {
-			c.defrag()
-			c.curLoc, err = c.findStartLoc()
-		}
+		indicies, err = c.findLoc()
 		if err != nil {
 			slog.Warn("unable to find a kv cache slot", "cache", c)
 			return err
@@ -220,30 +217,32 @@ func (c *Causal) StartForward(ctx ml.Context, batch input.Batch, reserve bool) e
 
 		for i, pos := range batch.Positions {
 			seq := batch.Sequences[i]
+			loc := int(indicies[i])
 
-			c.cells[c.curLoc+i] = cacheCell{pos: pos, sequences: []int{seq}}
+			c.cells[loc] = cacheCell{pos: pos, sequences: []int{seq}}
 
 			seqRange, ok := c.cellRanges[seq]
 			if !ok {
 				seqRange = newRange()
 			}
 
-			seqRange.min = min(seqRange.min, c.curLoc+i)
-			c.curCellRange.min = min(c.curCellRange.min, c.curLoc+i)
+			seqRange.min = min(seqRange.min, loc)
+			c.curCellRange.min = min(c.curCellRange.min, loc)
 
-			seqRange.max = max(seqRange.max, c.curLoc+i)
-			c.curCellRange.max = max(c.curCellRange.max, c.curLoc+i)
+			seqRange.max = max(seqRange.max, loc)
+			c.curCellRange.max = max(c.curCellRange.max, loc)
 
 			c.cellRanges[seq] = seqRange
 		}
 	} else {
 		// If we are reserving memory, don't update any of the cache metadata but set the size
 		// to the worst case.
-		c.curLoc = 0
+		indicies = make([]int64, c.curBatchSize)
 		c.curCellRange.min = 0
 		c.curCellRange.max = len(c.cells) - 1
 	}
 
+	c.curLoc = ctx.Input().FromInt64Slice(indicies, len(indicies))
 	c.curMask = c.buildMask(ctx)
 
 	return nil
@@ -257,21 +256,21 @@ func newRange() cellRange {
 }
 
 // Find the first contiguous block of at least curBatchSize
-func (c *Causal) findStartLoc() (int, error) {
-	var start, count int
+func (c *Causal) findLoc() ([]int64, error) {
+	loc := make([]int64, c.curBatchSize)
+
+	var count int
 	for i := range c.cells {
 		if len(c.cells[i].sequences) == 0 {
+			loc[count] = int64(i)
 			count++
 			if count >= c.curBatchSize {
-				return start, nil
+				return loc, nil
 			}
-		} else {
-			start = i + 1
-			count = 0
 		}
 	}
 
-	return 0, fmt.Errorf("%w (cache: %v batch: %v)", ErrKvCacheFull, len(c.cells), c.curBatchSize)
+	return nil, fmt.Errorf("%w (cache: %v batch: %v)", ErrKvCacheFull, len(c.cells), c.curBatchSize)
 }
 
 func (c *Causal) updateSlidingWindow() {
@@ -384,145 +383,6 @@ func (c *Causal) buildMask(ctx ml.Context) ml.Tensor {
 	return maskTensor
 }
 
-func (c *Causal) moveCells(ctx ml.Context, src, dst, length int) {
-	for i, key := range c.keys {
-		if key == nil {
-			continue
-		}
-
-		kHeadDim := key.Dim(0)
-		numKVHeads := key.Dim(1)
-		rowSize := key.Stride(2)
-
-		kSrcView := key.View(ctx, rowSize*src, kHeadDim*numKVHeads*length)
-		kDstView := key.View(ctx, rowSize*dst, kHeadDim*numKVHeads*length)
-
-		value := c.values[i]
-		var vSrcView, vDstView ml.Tensor
-		if c.config.PermutedV {
-			vHeadDim := value.Dim(1)
-			elemSize := value.Stride(0)
-
-			vSrcView = value.View(ctx, elemSize*src, length, len(c.cells)*elemSize, vHeadDim*numKVHeads)
-			vDstView = value.View(ctx, elemSize*dst, length, len(c.cells)*elemSize, vHeadDim*numKVHeads)
-		} else {
-			vHeadDim := value.Dim(0)
-			rowSize := value.Stride(2)
-
-			vSrcView = value.View(ctx, rowSize*src, vHeadDim*numKVHeads*length)
-			vDstView = value.View(ctx, rowSize*dst, vHeadDim*numKVHeads*length)
-		}
-
-		ctx.Forward(
-			kSrcView.Copy(ctx, kDstView),
-			vSrcView.Copy(ctx, vDstView),
-		)
-	}
-}
-
-func (c *Causal) defrag() {
-	slog.Debug("defragmenting kv cache")
-
-	// Defrag strategy:
-	// - Search for empty holes at the beginning of the cache,
-	//   filling them with active data starting at the end
-	// - If there are contiguous elements that need to be moved,
-	//   combine them into a single operation by holding new moves
-	//   until we see that the next one is non-contiguous
-	// - Fill up the context with the maximum number of operations it
-	//   can hold then compute that and continue with a new context
-	//
-	// We could try to optimize placement by grouping blocks from
-	// the same sequences together but most likely the next forward
-	// pass will disrupt this anyways, so the real world benefit
-	// seems limited as this time.
-
-	ctx := c.backend.NewContext()
-
-	// For every move, 6 tensors are required per layer (2 views and a
-	// copy for each of k and v). We also need to refer to the original
-	// k and v cache tensors - once per layer, not per move.
-	layers := 0
-	for _, key := range c.keys {
-		if key == nil {
-			continue
-		}
-		layers++
-	}
-
-	maxMoves := (ctx.MaxGraphNodes() - 2*layers) / (6 * layers)
-	moves := 0
-
-	var pendingSrc, pendingDst, pendingLen int
-	src := len(c.cells) - 1
-
-	for dst := 0; dst < src; dst++ {
-		if len(c.cells[dst].sequences) == 0 {
-			for ; src > dst; src-- {
-				if len(c.cells[src].sequences) != 0 {
-					c.cells[dst] = c.cells[src]
-					c.cells[src] = cacheCell{}
-
-					if pendingLen > 0 {
-						if src == pendingSrc-pendingLen && dst == pendingDst+pendingLen {
-							pendingSrc = src
-							pendingLen++
-							break
-						} else {
-							c.moveCells(ctx, pendingSrc, pendingDst, pendingLen)
-							moves++
-						}
-					}
-
-					pendingSrc = src
-					pendingDst = dst
-					pendingLen = 1
-
-					break
-				}
-			}
-		}
-
-		if moves >= maxMoves {
-			ctx.Compute()
-			ctx.Close()
-			ctx = c.backend.NewContext()
-
-			moves = 0
-		}
-	}
-
-	if pendingLen > 0 {
-		c.moveCells(ctx, pendingSrc, pendingDst, pendingLen)
-		moves++
-	}
-
-	if moves > 0 {
-		ctx.Compute()
-	}
-	ctx.Close()
-
-	// Reset range metadata
-	for seq := range c.cellRanges {
-		seqRange := newRange()
-
-		for i, cell := range c.cells {
-			if slices.Contains(cell.sequences, seq) {
-				if i < seqRange.min {
-					seqRange.min = i
-				}
-				if i > seqRange.max {
-					seqRange.max = i
-				}
-			}
-		}
-
-		c.cellRanges[seq] = seqRange
-	}
-
-	c.updateSlidingWindow()
-}
-
 func (c *Causal) SetLayer(layer int) {
 	c.curLayer = layer
 }
@@ -607,18 +467,24 @@ func (c *Causal) Put(ctx ml.Context, key, value ml.Tensor) {
 		}
 	}
 
-	rowSize := c.keys[c.curLayer].Stride(2)
-	ctx.Forward(key.Copy(ctx, c.keys[c.curLayer].View(ctx, rowSize*c.curLoc, kHeadDim*numKVHeads*batchSize)))
+	key = key.Reshape(ctx, key.Dim(0)*key.Dim(1), key.Dim(2))
+	keyCache := c.keys[c.curLayer]
+	keyCache = keyCache.Reshape(ctx, keyCache.Dim(0)*keyCache.Dim(1), keyCache.Dim(2))
+	ctx.Forward(keyCache.SetRows(ctx, key, c.curLoc))
 
 	if c.config.PermutedV {
-		elemSize := c.values[c.curLayer].Stride(0)
+		value = value.Reshape(ctx, value.Dim(0)*value.Dim(1), 1, value.Dim(2))
+		value = value.Permute(ctx, 2, 0, 1, 3)
 
-		value = value.Permute(ctx, 1, 2, 0, 3)
-		ctx.Forward(value.Copy(ctx, c.values[c.curLayer].View(ctx, elemSize*c.curLoc, batchSize, len(c.cells)*elemSize, vHeadDim*numKVHeads)))
+		valueCache := c.values[c.curLayer]
+		valueCache = valueCache.Reshape(ctx, 1, valueCache.Dim(0), valueCache.Dim(1)*valueCache.Dim(2))
+
+		ctx.Forward(valueCache.SetRows(ctx, value, c.curLoc))
 	} else {
-		rowSize := c.values[c.curLayer].Stride(2)
-
-		ctx.Forward(value.Copy(ctx, c.values[c.curLayer].View(ctx, rowSize*c.curLoc, vHeadDim*numKVHeads*batchSize)))
+		value = value.Reshape(ctx, value.Dim(0)*value.Dim(1), value.Dim(2))
+		valueCache := c.values[c.curLayer]
+		valueCache = valueCache.Reshape(ctx, valueCache.Dim(0)*valueCache.Dim(1), valueCache.Dim(2))
+		ctx.Forward(valueCache.SetRows(ctx, value, c.curLoc))
 	}
 }
 
