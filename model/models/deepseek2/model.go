@@ -3,6 +3,8 @@ package deepseek2
 // uses deepseek 2 architecture but written based on deepseek 3 model
 
 import (
+	"cmp"
+	"fmt"
 	"math"
 
 	"github.com/ollama/ollama/fs"
@@ -32,8 +34,8 @@ type Options struct {
 	hiddenSize,
 	numHeads,
 	numKVHeads,
-	keyLength,
-	valueLength,
+	// keyLength,
+	// valueLength,
 	originalContextLength int
 
 	eps,
@@ -62,10 +64,47 @@ type Attention struct {
 	KVANorm *nn.RMSNorm `gguf:"attn_kv_a_norm"`
 	KVB     *nn.Linear  `gguf:"attn_kv_b"`
 
+	KB     *nn.Linear  `gguf:"attn_k_b"`
+	VB     *nn.Linear  `gguf:"attn_v_b"`
+
 	Output *nn.Linear `gguf:"attn_out,alt:attn_output"`
 }
 
 func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor, cache kvcache.Cache, opts *Options) ml.Tensor {
+	fmt.Printf("HELLO!\n")
+
+	if attn.KVB.Weight != nil { // then we need to split it
+		fmt.Printf("SPLITTING!\n")
+		fmt.Printf("KVB shape: %v\n", attn.KVB.Weight.Shape())
+		fmt.Printf("KVB stride 0: %v\n", attn.KVB.Weight.Stride(0))
+		fmt.Printf("KVB stride 1: %v\n", attn.KVB.Weight.Stride(1))
+		fmt.Printf("KVB stride 2: %v\n", attn.KVB.Weight.Stride(2))
+
+		kvb := attn.KVB.Weight
+
+		kvb = kvb.Reshape(ctx, 512, 256, 128)
+		fmt.Printf("KVB shape: %v\n", kvb.Shape())
+		kvb = kvb.Permute(ctx, 1, 0, 2, 3) //.Contiguous(ctx)
+		fmt.Printf("KVB shape: %v\n", kvb.Shape())
+
+		kb := kvb.View(ctx, 
+			0, 128,
+			kvb.Stride(1), kvb.Dim(1), 
+			kvb.Stride(2), kvb.Dim(2)
+		)
+
+		vb := kvb.View(ctx, 
+			128*kvb.Stride(0), 128,
+			kvb.Stride(1), kvb.Dim(1), 
+			kvb.Stride(2), kvb.Dim(2)
+		)
+	
+
+		fmt.Printf("KB: %v\n", kb.Shape())
+	}
+
+	return nil
+
 	seqLength := hiddenStates.Dim(1)
 
 	var query ml.Tensor
@@ -78,16 +117,29 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 	}
 
 	query = query.Reshape(ctx, query.Dim(0)/opts.numHeads, opts.numHeads, seqLength)
+	fmt.Printf("QUERY: %v\n", query.Shape())
+	fmt.Printf("QUERY STRIDE 0: %v\n", query.Stride(0))
+	fmt.Printf("QUERY STRIDE 1: %v\n", query.Stride(1))
+	fmt.Printf("QUERY STRIDE 2: %v\n", query.Stride(2))
+	fmt.Printf("QUERY DIM 0: %v\n", query.Dim(0))
+	fmt.Printf("QUERY DIM 1: %v\n", query.Dim(1))
+	fmt.Printf("QUERY DIM 2: %v\n", query.Dim(2))
 
 	qPass := query.View(ctx, 0,
 		opts.qkNopeHeadDim, query.Stride(1),
 		query.Dim(1), query.Stride(2),
 		query.Dim(2))
 
+	fmt.Printf("QPASS: %v\n", qPass.Shape())
+
 	qRot := query.View(ctx, opts.qkNopeHeadDim*query.Stride(0),
 		opts.qkRopeHeadDim, query.Stride(1),
 		query.Dim(1), query.Stride(2),
 		query.Dim(2))
+	
+	fmt.Printf("QROT: %v\n", qRot.Shape())
+
+	return nil
 
 	compressedKV := attn.KVA.Forward(ctx, hiddenStates)
 
@@ -229,7 +281,8 @@ type Model struct {
 }
 
 func New(c fs.Config) (model.Model, error) {
-	layers := make([]Layer, c.Uint("block_count"))
+	// layers := make([]Layer, c.Uint("block_count"))
+	layers := make([]Layer, 1)
 
 	firstDenseLayerIndex := int(c.Uint("leading_dense_block_count"))
 	for i := range layers {
@@ -242,6 +295,9 @@ func New(c fs.Config) (model.Model, error) {
 
 	mScale := float32(1.0 + float64(c.Float("rope.scaling.yarn_log_multiplier"))*math.Log(float64(c.Float("rope.scaling.factor"))))
 	kqScale := float64(mScale) * float64(mScale) / math.Sqrt(float64(c.Uint("attention.key_length")))
+
+	keyLength := cmp.Or(int(c.Uint("attention.key_length_mla")), int(c.Uint("attention.key_length")))
+	valueLength := cmp.Or(int(c.Uint("attention.value_length_mla")), int(c.Uint("attention.value_length")))
 
 	m := Model{
 		BytePairEncoding: model.NewBytePairEncoding(
@@ -267,8 +323,8 @@ func New(c fs.Config) (model.Model, error) {
 			hiddenSize:     int(c.Uint("embedding_length")),
 			numHeads:       int(c.Uint("attention.head_count")),
 			numKVHeads:     int(c.Uint("attention.head_count_kv")),
-			keyLength:      int(c.Uint("attention.key_length")),
-			valueLength:    int(c.Uint("attention.value_length")),
+			// keyLength:      keyLength,
+			// valueLength:    valueLength,
 			eps:            c.Float("attention.layer_norm_rms_epsilon"),
 			ropeBase:       c.Float("rope.freq_base"),
 			ropeScale:      c.Float("rope.scaling.factor", 1),
@@ -278,11 +334,11 @@ func New(c fs.Config) (model.Model, error) {
 
 			qLoraRank:     int(c.Uint("attention.q_lora_rank")), //&qLoraRankVal,
 			kvLoraRank:    int(c.Uint("attention.kv_lora_rank")),
-			qkHeadDim:     int(c.Uint("attention.key_length")),
-			vHeadDim:      int(c.Uint("attention.value_length")),
+			qkHeadDim:     keyLength,
+			vHeadDim:      valueLength,
 			qkRopeHeadDim: int(c.Uint("rope.dimension_count")),
-			qkNopeHeadDim: int(c.Uint("attention.key_length")) - int(c.Uint("rope.dimension_count")),
-			kqNopeHeadDim: int(c.Uint("attention.key_length")) - int(c.Uint("rope.dimension_count")),
+			qkNopeHeadDim: keyLength - int(c.Uint("rope.dimension_count")),
+			kqNopeHeadDim: keyLength - int(c.Uint("rope.dimension_count")),
 
 			routedScalingFactor:   c.Float("expert_weights_scale"),
 			originalContextLength: int(c.Uint("rope.scaling.original_context_length")),
