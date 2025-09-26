@@ -194,10 +194,7 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 	// attention := nn.Attention(ctx, query, key, value, opts.kqScale, cache)
 	attention := nn.AttentionWithVMLA(ctx, query, key, value, nil, attn.VB.Weight, opts.kqScale, cache) // is there a better way to write this?
 	fmt.Printf("attention shape: %v\n", attention.Shape())
-	// func AttentionWithVMLA(ctx ml.Context, query, key, value, sinks ml.Tensor, vmla ml.Tensor, scale float64, cache kvcache.Cache) ml.Tensor {
-	// the attention is where there is difference
-
-	// attention := nn.Attention(ctx, query, key, value, opts.kqScale, cache)
+	
 	attention = attention.Reshape(ctx, attention.Dim(0)*attention.Dim(1), seqLength)
 	fmt.Printf("attention shape: %v\n", attention.Shape())
 	return attn.Output.Forward(ctx, attention)

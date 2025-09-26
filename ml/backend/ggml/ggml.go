@@ -1509,8 +1509,6 @@ func (t *Tensor) Set(ctx ml.Context, t2 ml.Tensor, offset int, strides ...int) m
 	return &Tensor{b: t.b, t: tt}
 }
 
-// func (t *Tensor) ScaledDotProductAttention(ctx ml.Context, key, value, mask, sinks ml.Tensor, scale float64) ml.Tensor {
-
 func (t *Tensor) ScaledDotProductAttention(ctx ml.Context, key, value, mask, sinks ml.Tensor, vmla ml.Tensor, scale float64) ml.Tensor { // add vmla
 	var kqMask *C.struct_ggml_tensor
 	if mask != nil {
