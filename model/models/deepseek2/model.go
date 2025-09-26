@@ -64,8 +64,8 @@ type Attention struct {
 	KVANorm *nn.RMSNorm `gguf:"attn_kv_a_norm"`
 	KVB     *nn.Linear  `gguf:"attn_kv_b"`
 
-	KB     *nn.Linear  `gguf:"attn_k_b"`
-	VB     *nn.Linear  `gguf:"attn_v_b"`
+	KB *nn.Linear `gguf:"attn_k_b"` // is this the best way to do it?
+	VB *nn.Linear `gguf:"attn_v_b"` // i dont think this is the best way to do it?
 
 	Output *nn.Linear `gguf:"attn_out,alt:attn_output"`
 }
@@ -74,6 +74,10 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 	fmt.Printf("HELLO!\n")
 
 	if attn.KVB.Weight != nil { // then we need to split it
+
+		attn.KB = &nn.Linear{}
+		attn.VB = &nn.Linear{}
+
 		fmt.Printf("SPLITTING!\n")
 		fmt.Printf("KVB shape: %v\n", attn.KVB.Weight.Shape())
 		fmt.Printf("KVB stride 0: %v\n", attn.KVB.Weight.Stride(0))
@@ -83,27 +87,31 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 		kvb := attn.KVB.Weight
 
 		kvb = kvb.Reshape(ctx, 512, 256, 128)
-		fmt.Printf("KVB shape: %v\n", kvb.Shape())
-		kvb = kvb.Permute(ctx, 1, 0, 2, 3) //.Contiguous(ctx)
-		fmt.Printf("KVB shape: %v\n", kvb.Shape())
+		fmt.Printf("KVB shape: %v\n", kvb.Shape()) // [512, 256, 128]
+		kvb = kvb.Permute(ctx, 1, 0, 2, 3)         //.Contiguous(ctx)
+		fmt.Printf("KVB shape: %v\n", kvb.Shape()) // [256, 512, 128]
 
-		kb := kvb.View(ctx, 
+		kb := kvb.View(ctx,
 			0, 128,
-			kvb.Stride(1), kvb.Dim(1), 
-			kvb.Stride(2), kvb.Dim(2)
+			kvb.Stride(1), kvb.Dim(1),
+			kvb.Stride(2), kvb.Dim(2),
 		)
+		fmt.Printf("KB shape: %v\n", kb.Shape()) // [128, 512, 128]
 
-		vb := kvb.View(ctx, 
+		vb := kvb.View(ctx,
 			128*kvb.Stride(0), 128,
-			kvb.Stride(1), kvb.Dim(1), 
-			kvb.Stride(2), kvb.Dim(2)
-		)
-	
+			kvb.Stride(1), kvb.Dim(1),
+			kvb.Stride(2), kvb.Dim(2),
+		) // [128, 512, 128]
 
-		fmt.Printf("KB: %v\n", kb.Shape())
+		vb = vb.Permute(ctx, 1, 0, 2, 3)         //.Contiguous(ctx)
+		fmt.Printf("VB shape: %v\n", vb.Shape()) // [512, 128, 128]
+
+		attn.KB.Weight = kb
+		fmt.Printf("saved 1\n")
+		attn.VB.Weight = vb
+		fmt.Printf("saved 2\n")
 	}
-
-	return nil
 
 	seqLength := hiddenStates.Dim(1)
 
@@ -117,29 +125,17 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 	}
 
 	query = query.Reshape(ctx, query.Dim(0)/opts.numHeads, opts.numHeads, seqLength)
-	fmt.Printf("QUERY: %v\n", query.Shape())
-	fmt.Printf("QUERY STRIDE 0: %v\n", query.Stride(0))
-	fmt.Printf("QUERY STRIDE 1: %v\n", query.Stride(1))
-	fmt.Printf("QUERY STRIDE 2: %v\n", query.Stride(2))
-	fmt.Printf("QUERY DIM 0: %v\n", query.Dim(0))
-	fmt.Printf("QUERY DIM 1: %v\n", query.Dim(1))
-	fmt.Printf("QUERY DIM 2: %v\n", query.Dim(2))
 
 	qPass := query.View(ctx, 0,
 		opts.qkNopeHeadDim, query.Stride(1),
 		query.Dim(1), query.Stride(2),
 		query.Dim(2))
-
-	fmt.Printf("QPASS: %v\n", qPass.Shape())
-
 	qRot := query.View(ctx, opts.qkNopeHeadDim*query.Stride(0),
 		opts.qkRopeHeadDim, query.Stride(1),
 		query.Dim(1), query.Stride(2),
 		query.Dim(2))
-	
-	fmt.Printf("QROT: %v\n", qRot.Shape())
 
-	return nil
+	// fmt.Printf("QROT: %v\n", qRot.Shape())
 
 	compressedKV := attn.KVA.Forward(ctx, hiddenStates)
 
@@ -149,28 +145,68 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 		1, compressedKV.Stride(1),
 		compressedKV.Dim(1))
 
-	kPass = attn.KVANorm.Forward(ctx, kPass, opts.eps)
-	kPass = attn.KVB.Forward(ctx, kPass)
-
-	kv := kPass.Reshape(ctx, kPass.Dim(0)/opts.numKVHeads, opts.numKVHeads, seqLength)
-	kPass = kv.View(ctx, 0, opts.kqNopeHeadDim, kv.Stride(1), kv.Dim(1), kv.Stride(2), kv.Dim(2))
-	value := kv.View(ctx, opts.kqNopeHeadDim*kv.Stride(0),
-		opts.vHeadDim, kv.Stride(1),
-		kv.Dim(1), kv.Stride(2),
-		kv.Dim(2)).Contiguous(ctx)
-
 	qRot = fast.RoPE(ctx, qRot, positions, opts.qkRopeHeadDim, opts.ropeBase, 1./opts.ropeScale, opts.RoPEOptions()...)
 	kRot = fast.RoPE(ctx, kRot, positions, opts.qkRopeHeadDim, opts.ropeBase, 1./opts.ropeScale, opts.RoPEOptions()...)
 
-	kRot = kRot.Repeat(ctx, 1, qPass.Dim(1))
+	kPass = attn.KVANorm.Forward(ctx, kPass, opts.eps)
 
-	query = qRot.Concat(ctx, qPass, 0)
+	fmt.Printf("Finished all KVA operations\n")
+	{
+		// kPass = attn.KVB.Forward(ctx, kPass)
+
+		// kv := kPass.Reshape(ctx, kPass.Dim(0)/opts.numKVHeads, opts.numKVHeads, seqLength)
+		// kPass = kv.View(ctx, 0, opts.kqNopeHeadDim, kv.Stride(1), kv.Dim(1), kv.Stride(2), kv.Dim(2))
+		// value := kv.View(ctx, opts.kqNopeHeadDim*kv.Stride(0),
+		// 	opts.vHeadDim, kv.Stride(1),
+		// 	kv.Dim(1), kv.Stride(2),
+		// 	kv.Dim(2)).Contiguous(ctx)
+
+		// // qRot = fast.RoPE(ctx, qRot, positions, opts.qkRopeHeadDim, opts.ropeBase, 1./opts.ropeScale, opts.RoPEOptions()...)
+		// // kRot = fast.RoPE(ctx, kRot, positions, opts.qkRopeHeadDim, opts.ropeBase, 1./opts.ropeScale, opts.RoPEOptions()...)
+
+		// kRot = kRot.Repeat(ctx, 1, qPass.Dim(1))
+
+		// query = qRot.Concat(ctx, qPass, 0)
+		// key := kRot.Concat(ctx, kPass, 0)
+
+		// attention := nn.Attention(ctx, query, key, value, opts.kqScale, cache)
+	}
+
+	qPass = qPass.Permute(ctx, 0, 2, 1, 3)
+	qPassAbsorb := attn.KB.Forward(ctx, qPass)
+	qPassAbsorb = qPassAbsorb.Permute(ctx, 0, 2, 1, 3)
+
+	query = qRot.Concat(ctx, qPassAbsorb, 0)
+	fmt.Printf("query shape: %v\n", query.Shape())
+
+	kPass = kPass.Reshape(ctx, opts.kvLoraRank, 1, seqLength)
+
 	key := kRot.Concat(ctx, kPass, 0)
+	fmt.Printf("key shape: %v\n", key.Shape())
+	value := kPass
+	fmt.Printf("value shape: %v\n", value.Shape())
 
-	attention := nn.Attention(ctx, query, key, value, opts.kqScale, cache)
+	// attention := nn.Attention(ctx, query, key, value, opts.kqScale, cache)
+	attention := nn.AttentionWithVMLA(ctx, query, key, value, nil, attn.VB.Weight, opts.kqScale, cache) // is there a better way to write this?
+	fmt.Printf("attention shape: %v\n", attention.Shape())
+	// func AttentionWithVMLA(ctx ml.Context, query, key, value, sinks ml.Tensor, vmla ml.Tensor, scale float64, cache kvcache.Cache) ml.Tensor {
+	// the attention is where there is difference
+
+	// attention := nn.Attention(ctx, query, key, value, opts.kqScale, cache)
 	attention = attention.Reshape(ctx, attention.Dim(0)*attention.Dim(1), seqLength)
+	fmt.Printf("attention shape: %v\n", attention.Shape())
 	return attn.Output.Forward(ctx, attention)
 }
+
+// original:
+// cur = build_attn(inp_attn,
+// 	model.layers[il].wo, NULL,
+// 	Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+
+// with mla:
+// cur = build_attn(inp_attn,
+// 	model.layers[il].wo, NULL,
+// 	Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
 
 type MLP interface {
 	Forward(ml.Context, ml.Tensor, *Options) ml.Tensor
@@ -320,9 +356,9 @@ func New(c fs.Config) (model.Model, error) {
 		),
 		Layers: layers,
 		Options: &Options{
-			hiddenSize:     int(c.Uint("embedding_length")),
-			numHeads:       int(c.Uint("attention.head_count")),
-			numKVHeads:     int(c.Uint("attention.head_count_kv")),
+			hiddenSize: int(c.Uint("embedding_length")),
+			numHeads:   int(c.Uint("attention.head_count")),
+			numKVHeads: int(c.Uint("attention.head_count_kv")),
 			// keyLength:      keyLength,
 			// valueLength:    valueLength,
 			eps:            c.Float("attention.layer_norm_rms_epsilon"),
