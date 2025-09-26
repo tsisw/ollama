@@ -22,15 +22,12 @@ import (
 //
 //	Attention output with shape [d_v, heads, seq_len_q]
 func Attention(ctx ml.Context, query, key, value ml.Tensor, scale float64, cache kvcache.Cache) ml.Tensor {
-	// return AttentionWithSinks(ctx, query, key, value, nil, scale, cache)
 	return AttentionWithVMLA(ctx, query, key, value, nil, nil, scale, cache)
 }
 
 func AttentionWithSinks(ctx ml.Context, query, key, value, sinks ml.Tensor, scale float64, cache kvcache.Cache) ml.Tensor {
 	return AttentionWithVMLA(ctx, query, key, value, sinks, nil, scale, cache)
 }
-
-// func AttentionWithSinks(ctx ml.Context, query, key, value, sinks ml.Tensor, scale float64, cache kvcache.Cache) ml.Tensor {
 
 func AttentionWithVMLA(ctx ml.Context, query, key, value, sinks ml.Tensor, vmla ml.Tensor, scale float64, cache kvcache.Cache) ml.Tensor {
 	ctx.Forward(query)
@@ -62,12 +59,9 @@ func AttentionWithVMLA(ctx ml.Context, query, key, value, sinks ml.Tensor, vmla 
 
 	// Only use the fast SDPA implementation if we have a cache, since that's what
 	// will do any expected backend-specific transformations for us
-	if sdpa, ok := query.(ml.ScaledDotProductAttention); ok && cache != nil { // is this where the flash stuff comes in?
-		fmt.Printf("Using SDPA\n")
-		// return sdpa.ScaledDotProductAttention(ctx, key, value, mask, sinks, scale)
+	if sdpa, ok := query.(ml.ScaledDotProductAttention); ok && cache != nil {
 		return sdpa.ScaledDotProductAttention(ctx, key, value, mask, sinks, vmla, scale)
 	} else {
-		fmt.Printf("NOT using SDPA\n")
 		query = query.Permute(ctx, 0, 2, 1, 3)
 		key = key.Permute(ctx, 0, 2, 1, 3)
 		value = value.Permute(ctx, 1, 2, 0, 3).Contiguous(ctx)

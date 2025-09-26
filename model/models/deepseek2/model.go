@@ -73,8 +73,9 @@ type Attention struct {
 func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor, cache kvcache.Cache, opts *Options) ml.Tensor {
 	fmt.Printf("HELLO!\n")
 
-	if attn.KVB.Weight != nil { // then we need to split it
+	fmt.Printf("KVB layer: %v\n", attn.KVB)
 
+	if attn.KVB != nil { // then we need to split it
 		attn.KB = &nn.Linear{}
 		attn.VB = &nn.Linear{}
 
@@ -113,6 +114,8 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 		fmt.Printf("saved 2\n")
 	}
 
+	fmt.Printf("Either completed or skipped splitting\n")
+
 	seqLength := hiddenStates.Dim(1)
 
 	var query ml.Tensor
@@ -123,6 +126,8 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 		query = attn.QANorm.Forward(ctx, query, opts.eps)
 		query = attn.QB.Forward(ctx, query)
 	}
+
+	fmt.Printf("query: %v\n", query.Shape())
 
 	query = query.Reshape(ctx, query.Dim(0)/opts.numHeads, opts.numHeads, seqLength)
 
@@ -197,16 +202,6 @@ func (attn *Attention) Forward(ctx ml.Context, hiddenStates, positions ml.Tensor
 	fmt.Printf("attention shape: %v\n", attention.Shape())
 	return attn.Output.Forward(ctx, attention)
 }
-
-// original:
-// cur = build_attn(inp_attn,
-// 	model.layers[il].wo, NULL,
-// 	Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-
-// with mla:
-// cur = build_attn(inp_attn,
-// 	model.layers[il].wo, NULL,
-// 	Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
 
 type MLP interface {
 	Forward(ml.Context, ml.Tensor, *Options) ml.Tensor
@@ -317,8 +312,8 @@ type Model struct {
 }
 
 func New(c fs.Config) (model.Model, error) {
-	// layers := make([]Layer, c.Uint("block_count"))
-	layers := make([]Layer, 1)
+	layers := make([]Layer, c.Uint("block_count"))
+	// layers := make([]Layer, 1)
 
 	firstDenseLayerIndex := int(c.Uint("leading_dense_block_count"))
 	for i := range layers {

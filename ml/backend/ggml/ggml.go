@@ -332,16 +332,16 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 				}
 			}
 
-			// if layerIndex >= 0 {
-			// 	createTensor(tensor{source: t}, layers[layerIndex].bts, layerIndex)
-			// } else {
-			// 	// load all other tensors on the cpu
-			// 	createTensor(tensor{source: t}, input.bts, -1)
-			// }
-
-			if layerIndex >= 0 && layerIndex < 1 {
+			if layerIndex >= 0 {
 				createTensor(tensor{source: t}, layers[layerIndex].bts, layerIndex)
+			} else {
+				// load all other tensors on the cpu
+				createTensor(tensor{source: t}, input.bts, -1)
 			}
+
+			// if layerIndex >= 0 && layerIndex < 1 {
+			// 	createTensor(tensor{source: t}, layers[layerIndex].bts, layerIndex)
+			// }
 		}
 	}
 
@@ -1523,21 +1523,12 @@ func (t *Tensor) ScaledDotProductAttention(ctx ml.Context, key, value, mask, sin
 	if t.b.flashAttention {
 		value = value.Permute(ctx, 0, 2, 1, 3)
 
-		kqvC := C.ggml_flash_attn_ext(ctx.(*Context).ctx, query.(*Tensor).t, key.(*Tensor).t, value.(*Tensor).t, kqMask, C.float(scale), 0, 0) // NOTE: kqv -> kqvC
+		kqv := C.ggml_flash_attn_ext(ctx.(*Context).ctx, query.(*Tensor).t, key.(*Tensor).t, value.(*Tensor).t, kqMask, C.float(scale), 0, 0) // NOTE: kqv -> kqvC
 		if sinks != nil {
-			C.ggml_flash_attn_ext_add_sinks(kqvC, sinks.(*Tensor).t) // NOTE: kqv -> kqvC
+			C.ggml_flash_attn_ext_add_sinks(kqv, sinks.(*Tensor).t) // NOTE: kqv -> kqvC
 		}
-		C.ggml_flash_attn_ext_set_prec(kqvC, C.GGML_PREC_F32) // NOTE: kqv -> kqvC
-
-		kqv := ml.Tensor(&Tensor{b: t.b, t: kqvC}) // does this slow anything down?
-
-		if vmla != nil {
-			kqv = kqv.Permute(ctx, 0, 2, 1, 3)
-			kqv = vmla.Mulmat(ctx, kqv)
-			kqv = kqv.Permute(ctx, 0, 2, 1, 3).Contiguous(ctx) // add contiguous
-		}
-		// return &Tensor{b: t.b, t: kqv}
-		return kqv
+		C.ggml_flash_attn_ext_set_prec(kqv, C.GGML_PREC_F32) // NOTE: kqv -> kqvC
+		return &Tensor{b: t.b, t: kqv}
 	} else {
 		kq := key.MulmatFullPrec(ctx, query)
 		kq = &Tensor{
@@ -1549,7 +1540,6 @@ func (t *Tensor) ScaledDotProductAttention(ctx ml.Context, key, value, mask, sin
 		}
 
 		kqv := value.Mulmat(ctx, kq)
-
 		if vmla != nil {
 			kqv = vmla.Mulmat(ctx, kqv)
 		}
