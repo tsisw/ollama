@@ -187,6 +187,7 @@ type Tensor interface {
 	Repeat(ctx Context, dim, n int) Tensor
 	Concat(ctx Context, t2 Tensor, dim int) Tensor
 	Rows(ctx Context, t2 Tensor) Tensor
+	SetRows(ctx Context, t2, indices Tensor) Tensor
 	Copy(ctx Context, t2 Tensor) Tensor
 	Duplicate(ctx Context) Tensor
 
