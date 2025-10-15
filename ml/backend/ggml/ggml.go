@@ -11,6 +11,7 @@ package ggml
 import "C"
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -1154,6 +1155,10 @@ func (t *Tensor) Concat(ctx ml.Context, t2 ml.Tensor, dim int) ml.Tensor {
 }
 
 func (t *Tensor) Contiguous(ctx ml.Context, shape ...int) ml.Tensor {
+	if slices.Contains(shape, -1) {
+		inferShape(t, shape)
+	}
+
 	switch len(shape) {
 	case 0:
 		return &Tensor{
@@ -1303,7 +1308,35 @@ func (t *Tensor) Copy(ctx ml.Context, t2 ml.Tensor) ml.Tensor {
 	}
 }
 
+func inferShape(t *Tensor, shape []int) {
+	total := 1
+	for _, dim := range t.Shape() {
+		total *= dim
+	}
+
+	dim := -1
+	for i := range shape {
+		if shape[i] > 0 {
+			total /= shape[i]
+		} else if shape[i] == -1 {
+			if dim != -1 {
+				panic("only one dimension can be inferred")
+			}
+
+			dim = i
+		}
+	}
+
+	if dim != -1 {
+		shape[dim] = total
+	}
+}
+
 func (t *Tensor) Reshape(ctx ml.Context, shape ...int) ml.Tensor {
+	if slices.Contains(shape, -1) {
+		inferShape(t, shape)
+	}
+
 	switch len(shape) {
 	case 1:
 		return &Tensor{
