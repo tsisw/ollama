@@ -77,6 +77,18 @@ index f1b74078..094fc3c8 100644
  
      GGML_API void                 ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend);
      GGML_API ggml_backend_t       ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node);
+diff --git a/ggml/include/ggml-tsavorite.h b/ggml/include/ggml-tsavorite.h
+index 1b4fecb7..e41acab4 100644
+--- a/ggml/include/ggml-tsavorite.h
++++ b/ggml/include/ggml-tsavorite.h
+@@ -221,6 +221,7 @@ extern void ggml_tsi_log_tensor_data(tensor_log log_data);
+ #define TSI_TVU_MEM_ALIGN 128
+ 
+ void tsi_cleanup();
++void ggml_device_cleanup();
+ 
+ //
+ // backend API
 diff --git a/ggml/include/gguf.h b/ggml/include/gguf.h
 index 79ee2020..3efb22f0 100644
 --- a/ggml/include/gguf.h
@@ -291,7 +303,7 @@ index bcae0901..6c847278 100644
 +++ b/ggml/src/ggml-backend-reg.cpp
 @@ -126,6 +126,18 @@ static dl_handle * dl_load_library(const fs::path & path) {
      SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
-
+ 
      HMODULE handle = LoadLibraryW(path.wstring().c_str());
 +    if (!handle) {
 +        DWORD error_code = GetLastError();
@@ -305,22 +317,22 @@ index bcae0901..6c847278 100644
 +            GGML_LOG_INFO("%s unable to load library %s: %s\n", __func__, path_str(path).c_str(), msg.c_str());
 +        }
 +    }
-
+ 
      SetErrorMode(old_mode);
-
+ 
 @@ -183,7 +195,7 @@ struct ggml_backend_reg_entry {
-
+ 
  struct ggml_backend_registry {
      std::vector<ggml_backend_reg_entry> backends;
 -    std::vector<ggml_backend_dev_t> devices;
 +    std::vector<std::pair<ggml_backend_dev_t, int>> devices;
-
+ 
      ggml_backend_registry() {
  #ifdef GGML_USE_CUDA
 @@ -239,7 +251,7 @@ struct ggml_backend_registry {
          }
      }
-
+ 
 -    void register_backend(ggml_backend_reg_t reg, dl_handle_ptr handle = nullptr) {
 +    void register_backend(ggml_backend_reg_t reg, int score = -1, dl_handle_ptr handle = nullptr) {
          if (!reg) {
@@ -334,7 +346,7 @@ index bcae0901..6c847278 100644
 +            register_device(ggml_backend_reg_dev_get(reg, i), score);
          }
      }
-
+ 
 -    void register_device(ggml_backend_dev_t device) {
 +    void register_device(ggml_backend_dev_t device, int score = -1) {
  #ifndef NDEBUG
@@ -348,15 +360,15 @@ index bcae0901..6c847278 100644
 +            }
 +        );
      }
-
+ 
      ggml_backend_reg_t load_backend(const fs::path & path, bool silent) {
 @@ -302,7 +319,7 @@ struct ggml_backend_registry {
-
+ 
          GGML_LOG_INFO("%s: loaded %s backend from %s\n", __func__, ggml_backend_reg_name(reg), path_str(path).c_str());
-
+ 
 -        register_backend(reg, std::move(handle));
 +        register_backend(reg, score_fn ? score_fn() : -1, std::move(handle));
-
+ 
          return reg;
      }
 @@ -325,7 +342,7 @@ struct ggml_backend_registry {
@@ -366,21 +378,21 @@ index bcae0901..6c847278 100644
 -                            [reg](ggml_backend_dev_t dev) { return ggml_backend_dev_backend_reg(dev) == reg; }),
 +                            [reg](std::pair<ggml_backend_dev_t, int> dev) { return ggml_backend_dev_backend_reg(dev.first) == reg; }),
              devices.end());
-
+ 
          // remove backend
 @@ -383,7 +400,7 @@ size_t ggml_backend_dev_count() {
-
+ 
  ggml_backend_dev_t ggml_backend_dev_get(size_t index) {
      GGML_ASSERT(index < ggml_backend_dev_count());
 -    return get_reg().devices[index];
 +    return get_reg().devices[index].first;
  }
-
+ 
  ggml_backend_dev_t ggml_backend_dev_by_name(const char * name) {
 @@ -605,19 +622,25 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
      bool silent = false;
  #endif
-
+ 
 -    ggml_backend_load_best("blas", silent, dir_path);
 +/*    ggml_backend_load_best("blas", silent, dir_path);
      ggml_backend_load_best("cann", silent, dir_path);
@@ -407,7 +419,7 @@ index bcae0901..6c847278 100644
      const char * backend_path = std::getenv("GGML_BACKEND_PATH");
      if (backend_path) {
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index d7d71c51..260ccba9 100644
+index 4c12c782..8b5ccb08 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -45,6 +45,19 @@ ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t
@@ -497,7 +509,7 @@ index d7d71c51..260ccba9 100644
  };
  
  #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
-@@ -1612,6 +1646,17 @@ ggml_backend_sched_t ggml_backend_sched_new(
+@@ -1617,6 +1651,17 @@ ggml_backend_sched_t ggml_backend_sched_new(
          size_t graph_size,
          bool parallel,
          bool op_offload) {
@@ -515,7 +527,7 @@ index d7d71c51..260ccba9 100644
      GGML_ASSERT(n_backends > 0);
      GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
      GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
-@@ -1653,10 +1698,13 @@ ggml_backend_sched_t ggml_backend_sched_new(
+@@ -1658,10 +1703,13 @@ ggml_backend_sched_t ggml_backend_sched_new(
                  sched->events[b][c] = ggml_backend_event_new(backends[b]->device);
              }
          }
@@ -529,7 +541,7 @@ index d7d71c51..260ccba9 100644
  
      ggml_backend_sched_reset(sched);
  
-@@ -1671,6 +1719,10 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+@@ -1676,6 +1724,10 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
          for (int c = 0; c < sched->n_copies; c++) {
              ggml_backend_event_free(sched->events[b][c]);
          }
@@ -540,7 +552,7 @@ index d7d71c51..260ccba9 100644
      }
      ggml_gallocr_free(sched->galloc);
      ggml_free(sched->ctx);
-@@ -1714,6 +1766,24 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
+@@ -1719,6 +1771,24 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
          return false;
      }
  
@@ -565,7 +577,7 @@ index d7d71c51..260ccba9 100644
      ggml_backend_sched_reset(sched);
  
      return true;
-@@ -1815,6 +1885,19 @@ size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backe
+@@ -1820,6 +1890,19 @@ size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backe
      return ggml_gallocr_get_buffer_size(sched->galloc, backend_index);
  }
  
@@ -585,7 +597,7 @@ index d7d71c51..260ccba9 100644
  void ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend) {
      GGML_ASSERT(sched);
      int backend_index = ggml_backend_sched_backend_id(sched, backend);
-@@ -2081,6 +2164,11 @@ static void * ggml_backend_cpu_buffer_get_base(ggml_backend_buffer_t buffer) {
+@@ -2086,6 +2169,11 @@ static void * ggml_backend_cpu_buffer_get_base(ggml_backend_buffer_t buffer) {
  static void ggml_backend_cpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
      GGML_ASSERT(buffer);
      ggml_aligned_free(buffer->context, buffer->size);
@@ -597,7 +609,7 @@ index d7d71c51..260ccba9 100644
  }
  
  static void ggml_backend_cpu_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
-@@ -2133,7 +2221,7 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
+@@ -2138,7 +2226,7 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
  };
  
  static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
@@ -606,6 +618,27 @@ index d7d71c51..260ccba9 100644
      /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
      /* .init_tensor     = */ NULL, // no initialization required
      /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
+@@ -2226,11 +2314,16 @@ ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size)
+     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
+     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+ }
+-
++extern void ggml_backend_device_cleanup();
+ void ggml_backend_cleanup()
+ {
+-    #ifdef GGML_TSAVORITE
+-        tsi_cleanup();
+-    #endif /* GGML_TSAVORITE */
++    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
++        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
++	const char *s1 = ggml_backend_reg_name(reg);
++	int result = strcmp(s1, "tsavorite");
++        if (result == 0) {
++            ggml_backend_device_cleanup();
++        }
++    }
+     return;
+ }
 diff --git a/ggml/src/ggml-blas/ggml-blas.cpp b/ggml/src/ggml-blas/ggml-blas.cpp
 index 5b888cdd..2a9ff7f6 100644
 --- a/ggml/src/ggml-blas/ggml-blas.cpp
@@ -678,6 +711,22 @@ index 97a61152..f7b69079 100644
          if (state->ith == 0 && cplan->abort_callback &&
                  cplan->abort_callback(cplan->abort_callback_data)) {
              atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 3191faaa..704e77d5 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -73,6 +73,11 @@ std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_type
+     return bufts;
+ }
+ 
++void ggml_backend_device_cleanup(void)
++{
++    return;
++}
++
+ static ggml_backend_buffer_type_t * ggml_backend_cpu_device_get_extra_buffers_type(ggml_backend_dev_t device) {
+     static std::vector<ggml_backend_buffer_type_t> extra_bufts = [] {
+         std::vector<ggml_backend_buffer_type_t> bufts = ggml_backend_cpu_get_extra_buffer_types();
 diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
 index b52f0f84..8567951a 100644
 --- a/ggml/src/ggml-cpu/ops.cpp
@@ -1916,6 +1965,102 @@ index 62d0ecd9..02e50a55 100644
  }
  
  static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+diff --git a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
+index 850d43e9..fd4a0508 100644
+--- a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
++++ b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
+@@ -21,6 +21,12 @@
+ #include <math.h>
+ #include <string>
+ #include <iostream>
++#include <filesystem>
++#include <fcntl.h>
++#include <sys/mman.h>
++#include <pthread.h>
++#include <stdbool.h>
++#include <stdio.h>
+ #include "ggml-backend-impl.h"
+ #include "ggml-impl.h"
+ #include "ggml.h"
+@@ -40,7 +46,9 @@ static void ensure_tsi_runtime_initialized() {
+     std::string mainProfilerName = "OPU ";
+     tsirt::utils::TSIProfiler::initialize();
+     // TSI Run time Initalization
++    GGML_TSAVORITE_LOG_INFO("TSI initialize in registration\n");
+     tsi_initialize(NUM_OF_TXES, NULL);
++    GGML_TSAVORITE_LOG_INFO("TSI initialized in registration\n");
+     runtime_initialized = true;
+     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
+   }
+@@ -733,6 +741,7 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
+   return;
+ }
+ 
++
+ void
+ tsi_cleanup() {
+     if (runtime_initialized != true)
+@@ -751,6 +760,11 @@ tsi_cleanup() {
+     return;
+ }
+ 
++void
++ggml_device_cleanup() {
++    tsi_cleanup();
++}
++
+ #if 0
+ // finds the tSavorite buffer that contains the tensor data on the TXE device unified memory
+ // the assumption is that there is 1-to-1 mapping between the host and device memory buffers, so we can find the
+@@ -2249,14 +2263,47 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
+     /* .get_proc_address = */ NULL,
+ };
+ 
++#define SHM_NAME "/ollama_init_shm"
++
++typedef struct {
++  bool init_done;
++} shared_state_t;
++
++static shared_state_t *state = NULL;
++
++static void init_shared_state() {
++  int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
++  if (fd == -1) {
++      perror("shm_open");
++      return;
++  }
++  ftruncate(fd, sizeof(shared_state_t));
++
++  state = (shared_state_t *) mmap(NULL, sizeof(shared_state_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++  if (state == MAP_FAILED) {
++      perror("mmap");
++      return;
++  }
++}
+ 
+ ggml_backend_reg_t ggml_backend_tsavorite_reg(void) {
+   ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
+   ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
+   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+-  ensure_tsi_runtime_initialized();
++
++  init_shared_state();
++
++  if (state->init_done == true) {
++      GGML_LOG_DEBUG("%s: Initialization already done, calling tsi_initialize...\n", __func__);
++      ensure_tsi_runtime_initialized();
++  } else {
++      state->init_done = true;
++      GGML_LOG_DEBUG("%s: Initialization not done, proceeding...\n", __func__);
++  }
++
+   g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
+   g_ggml_backend_tsavorite_reg.context = NULL;
++  g_ggml_backend_tsavorite_reg.api_version = GGML_BACKEND_API_VERSION;
+   g_ggml_backend_tsavorite_device.iface = ggml_backend_tsavorite_device_i;
+   g_ggml_backend_tsavorite_device.reg = &g_ggml_backend_tsavorite_reg;
+   g_ggml_backend_tsavorite_device.context = &g_ggml_ctx_dev_main;
 diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
 index b783f780..ce72912a 100644
 --- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
@@ -3778,80 +3923,3 @@ index 00000000..8ef19b8c
 +} // extern "C"
 +
 +#endif // #ifdef _WIN32
-diff --git a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
-index 850d43e9..3e8b5283 100644
---- a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
-+++ b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
-@@ -21,6 +21,12 @@
- #include <math.h>
- #include <string>
- #include <iostream>
-+#include <filesystem>
-+#include <fcntl.h>
-+#include <sys/mman.h>
-+#include <pthread.h>
-+#include <stdbool.h>
-+#include <stdio.h>
- #include "ggml-backend-impl.h"
- #include "ggml-impl.h"
- #include "ggml.h"
-@@ -40,7 +46,9 @@ static void ensure_tsi_runtime_initialized() {
-     std::string mainProfilerName = "OPU ";
-     tsirt::utils::TSIProfiler::initialize();
-     // TSI Run time Initalization
-+    GGML_TSAVORITE_LOG_INFO("TSI initialize in registration\n");
-     tsi_initialize(NUM_OF_TXES, NULL);
-+    GGML_TSAVORITE_LOG_INFO("TSI initialized in registration\n");
-     runtime_initialized = true;
-     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
-   }
-@@ -2249,14 +2257,47 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
-     /* .get_proc_address = */ NULL,
- };
-
-+#define SHM_NAME "/ollama_init_shm"
-+
-+typedef struct {
-+  bool init_done;
-+} shared_state_t;
-+
-+static shared_state_t *state = NULL;
-+
-+static void init_shared_state() {
-+  int fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
-+  if (fd == -1) {
-+      perror("shm_open");
-+      return;
-+  }
-+  ftruncate(fd, sizeof(shared_state_t));
-+
-+  state = (shared_state_t *) mmap(NULL, sizeof(shared_state_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-+  if (state == MAP_FAILED) {
-+      perror("mmap");
-+      return;
-+  }
-+}
-
- ggml_backend_reg_t ggml_backend_tsavorite_reg(void) {
-   ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
-   ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
-   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
--  ensure_tsi_runtime_initialized();
-+
-+  init_shared_state();
-+
-+  if (state->init_done == true) {
-+      GGML_LOG_DEBUG("%s: Initialization already done, calling tsi_initialize...\n", __func__);
-+      ensure_tsi_runtime_initialized();
-+  } else {
-+      state->init_done = true;
-+      GGML_LOG_DEBUG("%s: Initialization not done, proceeding...\n", __func__);
-+  }
-+
-   g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
-   g_ggml_backend_tsavorite_reg.context = NULL;
-+  g_ggml_backend_tsavorite_reg.api_version = GGML_BACKEND_API_VERSION;
-   g_ggml_backend_tsavorite_device.iface = ggml_backend_tsavorite_device_i;
-   g_ggml_backend_tsavorite_device.reg = &g_ggml_backend_tsavorite_reg;
-   g_ggml_backend_tsavorite_device.context = &g_ggml_ctx_dev_main;
-

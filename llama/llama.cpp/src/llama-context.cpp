@@ -112,6 +112,8 @@ llama_context::llama_context(
         }
     }
 
+    ggml_backend_cleanup();
+
     const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
 
     LLAMA_LOG_INFO("%s: n_seq_max     = %u\n",   __func__, cparams.n_seq_max);
