@@ -1718,20 +1718,21 @@ func (s *llmServer) Close() error {
 
 	if s.cmd != nil {
 		slog.Debug("stopping llama server", "pid", s.Pid())
-		if true {
-			return nil
-		} else {
-			if err := s.cmd.Process.Kill(); err != nil {
-				return err
-			}
-			// if ProcessState is already populated, Wait already completed, no need to wait again
-			if s.cmd.ProcessState == nil {
-				slog.Debug("waiting for llama server to exit", "pid", s.Pid())
-				<-s.done
-			}
-
-			slog.Debug("llama server stopped", "pid", s.Pid())
+		if err := s.cmd.Process.Kill(); err != nil {
+			return err
 		}
+		// if ProcessState is already populated, Wait already completed, no need to wait again
+                select {
+                case <-time.After(1 * time.Second):
+                        var errs error
+                        errs = errors.Join(errs, fmt.Errorf("wait timeout after kill"))
+                }
+		if s.cmd.ProcessState == nil {
+			slog.Debug("waiting for llama server to exit", "pid", s.Pid())
+			<-s.done
+		}
+
+		slog.Debug("llama server stopped", "pid", s.Pid())
 	}
 
 	return nil
