@@ -230,6 +230,91 @@ ollama stop llama3.2
 
 `ollama serve` is used when you want to start ollama without running the desktop application.
 
+## Building for Tsavorite
+
+The `tsi-ollama-bundle.sh` script builds ollama with Tsavorite backend support for both POSIX and FPGA targets.
+
+### Prerequisites
+
+- MLIR SDK installed (default: `/proj/rel/sw/sdk-r.0.2.3`)
+- Toolbox installed (default: `/proj/rel/sw/sdk-r.0.2.3/toolbox/build/install-fpga`)
+- Python 3.11.12 (for MLIR Python bindings)
+- GCC 13.3.0 module loaded
+- Go compiler (for ARM64 binary)
+
+### Usage
+
+#### Clean build artifacts
+
+```bash
+./tsi-ollama-bundle.sh clean
+```
+
+This removes all build directories, Python virtual environments, and release artifacts:
+- Kernel build directories (`fpga-kernel/build-fpga`, `posix-kernel/build-posix`)
+- Python venv (`blob-creation`)
+- Main build directories (`build-posix`, `build-fpga`)
+- Release artifacts (`ollama-arm64-release`, tarballs, binaries)
+
+#### Build with default settings
+
+```bash
+./tsi-ollama-bundle.sh
+```
+
+Builds with default performance flags for both POSIX and FPGA targets.
+
+#### Build types
+
+```bash
+# Release build (optimized)
+./tsi-ollama-bundle.sh release
+
+# Debug build (with detailed logging)
+./tsi-ollama-bundle.sh debug
+
+# Apply patches first, then build
+./tsi-ollama-bundle.sh patch
+```
+
+#### Specify toolbox directory
+
+```bash
+# Via command line argument
+./tsi-ollama-bundle.sh --toolbox-dir /path/to/toolbox/install-fpga
+
+# Via environment variable
+TOOLBOX_DIR=/path/to/toolbox/install-fpga ./tsi-ollama-bundle.sh
+
+# Short form
+./tsi-ollama-bundle.sh -t /path/to/toolbox/install-fpga
+```
+
+**Priority order:** Command line argument > Environment variable > Default path
+
+#### Combined options
+
+```bash
+# Clean and build release with custom toolbox
+./tsi-ollama-bundle.sh clean release --toolbox-dir /path/to/toolbox
+```
+
+### What the script does
+
+1. **Sets up Python environment**: Creates a Python 3.11 venv and installs MLIR dependencies
+2. **Builds TSI kernels**: Compiles kernels for both FPGA and POSIX targets
+3. **Builds POSIX target**: Compiles ollama with Tsavorite backend for POSIX simulation
+4. **Builds FPGA target**: Cross-compiles ollama with Tsavorite backend for ARM64 FPGA
+5. **Creates release bundle**: Packages everything into `ollama-arm64-release.tar.gz`
+
+### Output
+
+- **POSIX build**: `build-posix/`
+- **FPGA build**: `build-fpga/`
+- **Release bundle**: `ollama-arm64-release.tar.gz`
+- **TSI GGML bundle**: `tsi-ggml/`
+
+
 ## Building
 
 See the [developer guide](https://github.com/ollama/ollama/blob/main/docs/development.md)

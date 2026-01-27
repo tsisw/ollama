@@ -18,13 +18,29 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_SYSTEM_NAME Linux)
 
 if (GGML_TSAVORITE AND ${GGML_TSAVORITE_TARGET} STREQUAL fpga)
-set(CMAKE_SYSTEM_PROCESSOR aarch64)
-# Set cross-compilers
-set(CMAKE_C_COMPILER /proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc)
-set(CMAKE_CXX_COMPILER /proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++)
-
-# Set paths for finding libraries and includes
-set(CMAKE_FIND_ROOT_PATH /proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/)
+    set(CMAKE_SYSTEM_PROCESSOR aarch64)
+    
+    # Use toolbox for ARM toolchain configuration
+    if (NOT DEFINED TOOLBOX_DIR)
+        message(FATAL_ERROR "TOOLBOX_DIR not defined (pass -DTOOLBOX_DIR=<path> or set TOOLBOX_DIR environment variable)")
+    endif()
+    
+    # Find toolbox package
+    set(Toolbox_DIR "${TOOLBOX_DIR}/lib/cmake")
+    find_package(Toolbox REQUIRED CONFIG)
+    
+    # Use toolbox's ARM toolchain file
+    set(TOOLBOX_TOOLCHAIN_FILE "${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake")
+    if (EXISTS "${TOOLBOX_TOOLCHAIN_FILE}")
+        # Include the ARM toolchain configuration
+        # This sets CMAKE_C_COMPILER, CMAKE_CXX_COMPILER, CMAKE_AR, CMAKE_STRIP, and CMAKE_FIND_ROOT_PATH
+        include("${TOOLBOX_TOOLCHAIN_FILE}")
+        message(STATUS "Using ARM toolchain from toolbox: ${TOOLBOX_DIR}")
+        message(STATUS "ARM C compiler: ${CMAKE_C_COMPILER}")
+        message(STATUS "ARM CXX compiler: ${CMAKE_CXX_COMPILER}")
+    else()
+        message(FATAL_ERROR "ARM toolchain file not found at ${TOOLBOX_TOOLCHAIN_FILE}")
+    endif()
 endif()
 
 set(GGML_BUILD ON)

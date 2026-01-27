@@ -2,8 +2,72 @@
 
 set -e
 
+BUILD_TYPE=""
+CLEAN_ONLY=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        clean)
+            CLEAN_ONLY=true
+            shift
+            ;;
+        patch|release|debug)
+            BUILD_TYPE="$1"
+            shift
+            ;;
+        *)
+            echo "Usage: $0 [clean|patch|release|debug]"
+            exit 1
+            ;;
+    esac
+done
+
+# Clean build artifacts if requested
+if [ "$CLEAN_ONLY" = true ]; then
+    echo "Cleaning build artifacts..."
+
+    # Clean posix kernel build directories
+    if [ -d "llama/vendor/ggml-tsi-kernel/posix-kernel/build-posix" ]; then
+        echo "Removing posix-kernel/build-posix..."
+        rm -rf llama/vendor/ggml-tsi-kernel/posix-kernel/build-posix
+    fi
+
+    # Clean Python venv
+    if [ -d "llama/vendor/ggml-tsi-kernel/blob-creation" ]; then
+        echo "Removing blob-creation venv..."
+        rm -rf llama/vendor/ggml-tsi-kernel/blob-creation
+    fi
+
+    # Clean main build directories
+    if [ -d "build-posix" ]; then
+        echo "Removing build-posix..."
+        rm -rf build-posix
+    fi
+
+    # Clean Go binary
+    if [ -f "ollama-x86_64" ]; then
+        echo "Removing ollama-x86_64..."
+        rm -f ollama-x86_64
+    fi
+
+    # Clean release artifacts
+    if [ -d "ollama-x86_64-release" ]; then
+        echo "Removing ollama-x86_64-release..."
+        rm -rf ollama-x86_64-release
+    fi
+
+    if [ -f "ollama-x86_64-release.tar.gz" ]; then
+        echo "Removing ollama-x86_64-release.tar.gz..."
+        rm -f ollama-x86_64-release.tar.gz
+    fi
+
+    echo "Clean completed."
+    exit 0
+fi
+
 # Apply patches if the patches have not been applied and the first argument is patch otherwise just build
-if [ "$1" == "patch" ]
+if [ "$BUILD_TYPE" == "patch" ]
 then
     make -f Makefile.sync checkout
     cd llama/vendor
@@ -18,14 +82,14 @@ echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
 module load gcc/13.3.0
-export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.0
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.3
 echo 'creating python virtual env'
-/proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
+/proj/local/Python-3.11.12/bin/python3 -m venv blob-creation
 source blob-creation/bin/activate
 echo 'installing mlir and python dependencies'
 pip install --upgrade pip
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
-pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.4.2-py3-none-any.whl
+pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.5.0-py3-none-any.whl
 pip install onnxruntime-training
 
 #build TSI kernels for the Tsavorite backend - POSIX only
@@ -41,10 +105,10 @@ cd ../../
 
 #Compile for posix with build-posix as a target folder
 echo 'building llama.cp, ggml for tsavorite and other binary for posix'
-if [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "release" ];
+if [ "$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')" = "release" ];
 then
   cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
-elif [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "debug" ]; then
+elif [ "$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')" = "debug" ]; then
   cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
 else
   cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DGGML_PERF -DGGML_TARGET_POSIX -DGGML_TSAVORITE"
