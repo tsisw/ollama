@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"os/signal"
+	"syscall"
 
 	"golang.org/x/sync/semaphore"
 
@@ -876,61 +878,100 @@ func (s *Server) load(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func Execute(args []string) error {
-	fs := flag.NewFlagSet("runner", flag.ExitOnError)
-	mpath := fs.String("model", "", "Path to model binary file")
-	port := fs.Int("port", 8080, "Port to expose the server on")
-	_ = fs.Bool("verbose", false, "verbose output (default: disabled)")
-
-	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Runner usage\n")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	slog.SetDefault(logutil.NewLogger(os.Stderr, envconfig.LogLevel()))
-	slog.Info("starting go runner")
-
-	llama.BackendInit()
-
-	server := &Server{
-		modelPath: *mpath,
-		status:    llm.ServerStatusLaunched,
-	}
-
-	server.ready.Add(1)
-
-	server.cond = sync.NewCond(&server.mu)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go server.run(ctx)
-
-	addr := "127.0.0.1:" + strconv.Itoa(*port)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		fmt.Println("Listen error:", err)
-		return err
-	}
-	defer listener.Close()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /load", server.load)
-	mux.HandleFunc("/embedding", server.embeddings)
-	mux.HandleFunc("/completion", server.completion)
-	mux.HandleFunc("/health", server.health)
-
-	httpServer := http.Server{
-		Handler: mux,
-	}
-
-	log.Println("Server listening on", addr)
-	if err := httpServer.Serve(listener); err != nil {
-		log.Fatal("server error:", err)
-		return err
-	}
-
+func (s *Server) Close() error {
+	// existing cleanup of contexts/models/etc
+	llama.BackendFree() // ensure GGML/llama backend is actually torn down
 	return nil
+}
+
+func Execute(args []string) error {
+    fs := flag.NewFlagSet("runner", flag.ExitOnError)
+    mpath := fs.String("model", "", "Path to model binary file")
+    port := fs.Int("port", 8080, "Port to expose the server on")
+    _ = fs.Bool("verbose", false, "verbose output (default: disabled)")
+
+    fs.Usage = func() {
+        fmt.Fprintf(fs.Output(), "Runner usage\n")
+        fs.PrintDefaults()
+    }
+    if err := fs.Parse(args); err != nil {
+        return err
+    }
+
+    slog.SetDefault(logutil.NewLogger(os.Stderr, envconfig.LogLevel()))
+    slog.Info("starting llama runner")
+
+    // 1) Initialize llama/ggml backends (pairs with server.Close()->llama.BackendFree()).
+    llama.BackendInit()
+
+    // 2) Construct your runner server.
+    server := &Server{
+        modelPath: *mpath,
+        status:    llm.ServerStatusLaunched,
+    }
+    server.ready.Add(1)
+    server.cond = sync.NewCond(&server.mu)
+
+    // 3) Start your internal processing loop.
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
+    go server.run(ctx)
+
+    // 4) Build listener + mux + http server.
+    addr := "127.0.0.1:" + strconv.Itoa(*port)
+    listener, err := net.Listen("tcp", addr)
+    if err != nil {
+        slog.Error("listen error", "addr", addr, "error", err)
+        return err
+    }
+    // defer listener.Close()  // not necessary when using httpServer.Shutdown, but safe if you like
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("POST /load", server.load)
+    mux.HandleFunc("/embedding", server.embeddings)
+    mux.HandleFunc("/completion", server.completion)
+    mux.HandleFunc("/health", server.health)
+
+    // Optional: graceful shutdown endpoint the parent can call
+    mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
+        slog.Debug("llamarunner: /shutdown requested")
+        _ = server.Close() // calls llama.BackendFree()
+        w.WriteHeader(http.StatusOK)
+        go func() {
+            time.Sleep(100 * time.Millisecond)
+            os.Exit(0)
+        }()
+    })
+
+    httpServer := &http.Server{
+        Handler: mux,
+    }
+
+    // 5) Serve in background.
+    go func() {
+        log.Println("Server listening on", addr)
+        if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+            slog.Error("http serve error", "error", err)
+        }
+    }()
+
+    // 6) Graceful shutdown on signals.
+    sigCh := make(chan os.Signal, 1)
+    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+    go func() {
+        <-sigCh
+        slog.Debug("llamarunner: signal received, shutting down")
+        shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer shCancel()
+
+        // Stop accepting and close idle connections.
+        _ = httpServer.Shutdown(shCtx)
+        // Close runner resources (will call llama.BackendFree()).
+        _ = server.Close()
+        os.Exit(0)
+    }()
+
+    // 7) Block until the process is terminated; or
+    //    if you have a done channel in `server`, wait on that here.
+    select {}
 }
