@@ -91,6 +91,7 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
 }
 
 void llama_backend_free(void) {
+    ggml_backend_free(ggml_backend_init_by_name("TSAVORITE", NULL));
     ggml_quantize_free();
 }
 

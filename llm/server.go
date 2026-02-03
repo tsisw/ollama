@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"syscall"
 
 	"golang.org/x/sync/semaphore"
 
@@ -1709,33 +1710,59 @@ func (s *llmServer) Detokenize(ctx context.Context, tokens []int) (string, error
 }
 
 func (s *llmServer) Close() error {
-	s.llamaModelLock.Lock()
-	if s.llamaModel != nil {
-		llama.FreeModel(s.llamaModel)
-		s.llamaModel = nil
-	}
-	s.llamaModelLock.Unlock()
+    // 0) Ask child to shut down gracefully (so it can call llama_backend_free()).
+    //    We do HTTP first (if child exposes /shutdown) and then a gentle signal.
+    if s.port != 0 {
+        shutdownURL := fmt.Sprintf("http://127.0.0.1:%d/shutdown", s.port)
+        ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+        defer cancel()
+        req, _ := http.NewRequestWithContext(ctx, http.MethodPost, shutdownURL, nil)
+        if resp, err := http.DefaultClient.Do(req); err == nil && resp != nil {
+            resp.Body.Close()
+            slog.Debug("requested child shutdown via HTTP", "url", shutdownURL)
+        } else {
+            slog.Debug("child HTTP shutdown not available; will try signal", "err", err)
+        }
+    }
+    if s.cmd != nil && s.cmd.Process != nil {
+        // Send SIGINT as a graceful hint (ignored on Windows, harmless elsewhere).
+        _ = s.cmd.Process.Signal(syscall.SIGINT)
+    }
 
-	if s.cmd != nil {
-		slog.Debug("stopping llama server", "pid", s.Pid())
-		if err := s.cmd.Process.Kill(); err != nil {
-			return err
-		}
-		// if ProcessState is already populated, Wait already completed, no need to wait again
-                select {
-                case <-time.After(1 * time.Second):
-                        var errs error
-                        errs = errors.Join(errs, fmt.Errorf("wait timeout after kill"))
-                }
-		if s.cmd.ProcessState == nil {
-			slog.Debug("waiting for llama server to exit", "pid", s.Pid())
-			<-s.done
-		}
+    // 1) Wait briefly for the child to exit cleanly
+    if s.cmd != nil && s.cmd.ProcessState == nil {
+        select {
+        case <-s.done:
+            slog.Debug("child exited cleanly", "pid", s.Pid())
+        case <-time.After(5 * time.Second):
+            slog.Warn("child graceful shutdown timed out; will attempt hard kill", "pid", s.Pid())
+        }
+    }
 
-		slog.Debug("llama server stopped", "pid", s.Pid())
-	}
+    // 2) If still running, hard kill, then wait a moment
+    if s.cmd != nil && s.cmd.ProcessState == nil {
+        slog.Debug("stopping llama server (hard kill)", "pid", s.Pid())
+        if err := s.cmd.Process.Kill(); err != nil {
+            return err
+        }
+        select {
+        case <-s.done:
+        case <-time.After(5 * time.Second):
+            slog.Warn("wait timeout after kill", "pid", s.Pid())
+        }
+    }
 
-	return nil
+    slog.Warn("llama server stopped", "pid", s.Pid())
+
+    // 3) Free any model handles owned by the parent process (often nil in llama.cpp mode)
+    s.llamaModelLock.Lock()
+    if s.llamaModel != nil {
+        llama.FreeModel(s.llamaModel)
+        s.llamaModel = nil
+    }
+    s.llamaModelLock.Unlock()
+
+    return nil
 }
 
 func (s *llamaServer) VRAMSize() uint64 {
