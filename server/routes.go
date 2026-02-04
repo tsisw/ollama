@@ -605,9 +605,6 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 	}
 
 	streamResponse(c, ch)
-
-	s.sched.unloadAllRunners()
-	s.sched.expireRunner(m)
 }
 
 func (s *Server) EmbedHandler(c *gin.Context) {

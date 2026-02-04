@@ -111,6 +111,7 @@ func (s *Scheduler) GetRunner(c context.Context, m *Model, opts api.Options, ses
 	if runner != nil && !runner.needsReload(c, req) {
 		req.useLoadedRunner(runner, s.finishedReqCh)
 	} else {
+		s.unloadAllRunners()
 		select {
 		case s.pendingReqCh <- req:
 		default:
