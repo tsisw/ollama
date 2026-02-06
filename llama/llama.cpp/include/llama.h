@@ -399,6 +399,9 @@ extern "C" {
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
 
+    // Call once at the end of the program to log profile - currently only used for MPI
+    LLAMA_API void llama_backend_log_profile(void);
+
     //optional:
     LLAMA_API void llama_numa_init(enum ggml_numa_strategy numa);
 

@@ -89,6 +89,10 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
         }
     }
 }
+extern "C"
+void llama_backend_log_profile(void) {
+    ggml_backend_log_profile_info(ggml_backend_init_by_name("TSAVORITE", NULL));
+}
 
 void llama_backend_free(void) {
     ggml_backend_free(ggml_backend_init_by_name("TSAVORITE", NULL));
