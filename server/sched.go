@@ -809,6 +809,24 @@ func (s *Scheduler) unloadAllRunners() {
 	}
 }
 
+func (s *Scheduler) BackendLogProfile() {
+	s.loadedMu.Lock()
+	defer s.loadedMu.Unlock()
+
+	if s.activeLoading != nil {
+		slog.Debug("shutting down currently loading runner")
+		//s.activeLoading.Close()
+		//s.activeLoading = nil
+	}
+
+	for model, runner := range s.loaded {
+		if runner.llama != nil {
+			slog.Debug("shutting down runner", "model", model)
+			runner.llama.LogProfile()
+		}
+	}
+}
+
 func (s *Scheduler) expireRunner(model *Model) {
 	s.loadedMu.Lock()
 	runner, ok := s.loaded[model.ModelPath]

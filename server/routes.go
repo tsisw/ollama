@@ -605,6 +605,7 @@ func (s *Server) GenerateHandler(c *gin.Context) {
 	}
 
 	streamResponse(c, ch)
+	s.sched.BackendLogProfile()
 }
 
 func (s *Server) EmbedHandler(c *gin.Context) {

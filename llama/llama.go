@@ -755,3 +755,8 @@ func (g *Grammar) Accept(token int32) {
 func BackendFree() {
     C.llama_backend_free()
 }
+
+// BackendFree releases global resources from llama.cpp (GGML backends, etc.).
+func BackendLogProfile() {
+    C.llama_backend_log_profile()
+}
