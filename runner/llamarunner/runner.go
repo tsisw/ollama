@@ -884,6 +884,11 @@ func (s *Server) Close() error {
 	return nil
 }
 
+func (s *Server) LogProfile() error {
+    llama.BackendLogProfile()
+    return nil
+}
+
 func Execute(args []string) error {
     fs := flag.NewFlagSet("runner", flag.ExitOnError)
     mpath := fs.String("model", "", "Path to model binary file")
@@ -936,6 +941,16 @@ func Execute(args []string) error {
     mux.HandleFunc("/shutdown", func(w http.ResponseWriter, r *http.Request) {
         slog.Debug("llamarunner: /shutdown requested")
         _ = server.Close() // calls llama.BackendFree()
+        w.WriteHeader(http.StatusOK)
+        go func() {
+            time.Sleep(100 * time.Millisecond)
+            os.Exit(0)
+        }()
+    })
+    // Optional: graceful shutdown endpoint the parent can call
+    mux.HandleFunc("/logprofile", func(w http.ResponseWriter, r *http.Request) {
+        slog.Debug("llamarunner: /logprofile requested")
+        _ = server.LogProfile() // calls llama.BackendFree()
         w.WriteHeader(http.StatusOK)
         go func() {
             time.Sleep(100 * time.Millisecond)

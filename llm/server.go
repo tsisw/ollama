@@ -82,6 +82,7 @@ type LlamaServer interface {
 	GetPort() int
 	GetDeviceInfos(ctx context.Context) []ml.DeviceInfo
 	HasExited() bool
+	LogProfile() error
 }
 
 // llmServer is an instance of a runner hosting a single model
@@ -1709,6 +1710,7 @@ func (s *llmServer) Detokenize(ctx context.Context, tokens []int) (string, error
 	return "", fmt.Errorf("no tokenizer configured")
 }
 
+
 func (s *llmServer) Close() error {
     // 0) Ask child to shut down gracefully (so it can call llama_backend_free()).
     //    We do HTTP first (if child exposes /shutdown) and then a gentle signal.
@@ -1765,6 +1767,23 @@ func (s *llmServer) Close() error {
     return nil
 }
 
+func (s *llmServer) LogProfile() error {
+    // 0) Ask child to shut down gracefully (so it can call llama_backend_free()).
+    //    We do HTTP first (if child exposes /shutdown) and then a gentle signal.
+    if s.port != 0 {
+        logprofileURL := fmt.Sprintf("http://127.0.0.1:%d/logprofile", s.port)
+        ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+        defer cancel()
+        req, _ := http.NewRequestWithContext(ctx, http.MethodPost, logprofileURL, nil)
+        if resp, err := http.DefaultClient.Do(req); err == nil && resp != nil {
+            slog.Debug("requested Profile log to be via HTTP", "url", logprofileURL)
+        } else {
+            slog.Warn("HTTP Profile log dump available", "err", err)
+        }
+    }
+
+    return nil
+}
 func (s *llamaServer) VRAMSize() uint64 {
 	return s.estimate.VRAMSize
 }
