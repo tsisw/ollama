@@ -1,6 +1,6 @@
 UPSTREAM=https://github.com/tsisw/llama.cpp.git
 WORKDIR=llama/vendor
-FETCH_HEAD=ae4addf5636fa9a112a7b1c44779bc77ae29d9cc
+FETCH_HEAD=2ce6eec81fc75aa011655feb82eb79a221c61f77
 
 .PHONY: help
 help:

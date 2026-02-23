@@ -1,5 +1,10 @@
 #!/bin/bash
-
+# NOTE:
+# To ensure environment variables are set in the current shell,
+# always run this script using:
+#   source tsi-ollama-bundle-posix.sh
+# or
+#   ./tsi-ollama-bundle-posix.sh
 set -e
 
 BUILD_TYPE=""
@@ -76,20 +81,38 @@ then
     make -f Makefile.sync ml/backend/ggml/ggml
 fi
 
+log_error() {
+  echo "ERROR: $*" >&2
+}
+
+m="$(uname -m)"
+case "$m" in
+    x86_64|amd64) arch="x86_64" ;;
+    aarch64|arm64) arch="aarch64" ;;
+    *)
+      log_error "Unsupported host arch from uname -m: $m"
+      exit
+      ;;
+esac
+
 cd llama/vendor
 #Ensure prerequisites are met as follows
 echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
 module load gcc/13.3.0
-export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.3
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.4/${arch}
+
+#export variable for FFM LUT lookup tabel to run in posix environment
+export FAU_LOOKUP_TABLE_PATH=${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/
+
 echo 'creating python virtual env'
 /proj/local/Python-3.11.12/bin/python3 -m venv blob-creation
 source blob-creation/bin/activate
 echo 'installing mlir and python dependencies'
 pip install --upgrade pip
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
-pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.5.0-py3-none-any.whl
+pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-*.whl
 pip install onnxruntime-training
 
 #build TSI kernels for the Tsavorite backend - POSIX only

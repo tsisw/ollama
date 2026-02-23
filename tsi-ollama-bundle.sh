@@ -27,6 +27,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+log_error() {
+  echo "ERROR: $*" >&2
+}
+
+m="$(uname -m)"
+case "$m" in
+    x86_64|amd64) arch="x86_64" ;;
+    aarch64|arm64) arch="aarch64" ;;
+    *)
+      log_error "Unsupported host arch from uname -m: $m"
+      exit
+      ;;
+esac
+
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.4/${arch}
+
+#export variable for FFM FAU Lookup table
+export FAU_LOOKUP_TABLE_PATH=${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/
+
 # Set TOOLBOX_DIR with priority: command line argument > environment variable > default
 # Priority: command line argument (--toolbox-dir) > environment variable (TOOLBOX_DIR) > default
 if [ -n "$TOOLBOX_DIR_ARG" ]; then
@@ -35,7 +54,7 @@ elif [ -n "${TOOLBOX_DIR}" ]; then
     # Use environment variable if set
     :
 else
-    TOOLBOX_DIR="/proj/rel/sw/sdk-r.0.2.3/toolbox/build/install-fpga"
+    TOOLBOX_DIR="${MLIR_SDK_VERSION}/toolbox/build/install-fpga"
 fi
 
 # Export TOOLBOX_DIR so CMake can see it
@@ -115,7 +134,7 @@ echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
 module load gcc/13.3.0
-export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.3
+
 echo 'creating python virtual env'
 # Use Python 3.11 to match MLIR bindings
 /proj/local/Python-3.11.12/bin/python3 -m venv blob-creation
@@ -125,7 +144,7 @@ echo 'installing mlir and python dependencies'
 export LD_LIBRARY_PATH="${MLIR_SDK_VERSION}/compiler/lib:${LD_LIBRARY_PATH:-}"
 pip install --upgrade pip
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
-pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.5.0-py3-none-any.whl
+pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-*.whl
 pip install onnxruntime-training
 
 #build TSI kernels for the Tsavorite backend
