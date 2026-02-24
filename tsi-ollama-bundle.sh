@@ -41,7 +41,7 @@ case "$m" in
       ;;
 esac
 
-export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.4/${arch}
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.5/${arch}
 
 #export variable for FFM FAU Lookup table
 export FAU_LOOKUP_TABLE_PATH=${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/
