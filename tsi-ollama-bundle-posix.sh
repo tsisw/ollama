@@ -101,7 +101,7 @@ echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
 module load gcc/13.3.0
-export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.5/${arch}
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.8/${arch}
 
 #export variable for FFM LUT lookup tabel to run in posix environment
 export FAU_LOOKUP_TABLE_PATH=${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/

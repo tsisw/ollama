@@ -159,7 +159,7 @@ Environment="HOME=/usr/share/ollama"
 Restart=always
 RestartSec=3
 Environment="PATH=$PATH"
-Environment="LD_LIBRARY_PATH=/usr/bin/tsi/bin/aot-tests/lib/:/usr/local/ollama-arm64-release/lib/:/usr/local/ollama-arm64-release/bin/"
+Environment="LD_LIBRARY_PATH=/usr/bin/tsi/bin/aot-tests/lib/:/usr/local/ollama-arm64-release/lib/:/usr/local/ollama-arm64-release/bin/:$LD_LIBRARY_PATH"
 [Install]
 WantedBy=default.target
 EOF
