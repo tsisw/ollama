@@ -691,7 +691,7 @@ build_fpga_impl() {
   [ "${want_tvu}" -eq 1 ] && supported="${supported} -DTVU_SUPPORTED"
 
   run cmake -B "${build_dir}" \
-    -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" \
+    -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" -DTOOLBOX_DIR="${TOOLBOX_DIR}" \
     -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DLLAMA_CURL=OFF \
     -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
     -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
@@ -702,8 +702,8 @@ build_fpga_impl() {
 }
 
 build_fpga() { build_fpga_impl "build-fpga" 1 1; }
-build_fpga_tmu_only() { build_fpga_impl "build-fpga-tmu-only" 1 0; }
-build_fpga_tmu_disable() { build_fpga_impl "build-fpga-tmu-disable" 0 1; }
+build_fpga_tmu_only() { build_fpga_impl "build-fpga" 1 0; }
+build_fpga_tmu_disable() { build_fpga_impl "build-fpga" 0 1; }
 
 choose_existing_fpga_build_dir_for_package() {
   # If user explicitly selected a package build dir, prefer it.
@@ -841,16 +841,7 @@ build_ollama() {
   export CC="${ARM_COMPILER_PREFIX}gcc"
   export CXX="${ARM_COMPILER_PREFIX}g++"
 
-  if [ "$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')" = "release" ];
-  then
-    cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DTOOLBOX_DIR="${TOOLBOX_DIR}" -DCMAKE_C_FLAGS="-DTVU_SUPPORTED -DGGML_PERF_RELEASE -DGGML_TARGET_FPGA -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DTVU_SUPPORTED -DGGML_PERF_RELEASE -DGGML_TARGET_FPGA -DGGML_TSAVORITE" -DCURL_INCLUDE_DIR=${ARM_TOOLCHAIN_PATH}/include  -DCURL_LIBRARY=${ARM_TOOLCHAIN_PATH}/lib/libcurl.so
-  elif [ "$(echo "$BUILD_TYPE" | tr '[:upper:]' '[:lower:]')" = "debug" ]; then
-    cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DTOOLBOX_DIR="${TOOLBOX_DIR}" -DCMAKE_C_FLAGS="-DTVU_SUPPORTED -DGGML_PERF_DETAIL -DGGML_TARGET_FPGA -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DTVU_SUPPORTED -DGGML_PERF_DETAIL -DGGML_TARGET_FPGA -DGGML_TSAVORITE" -DCURL_INCLUDE_DIR=${ARM_TOOLCHAIN_PATH}/include  -DCURL_LIBRARY=${ARM_TOOLCHAIN_PATH}/lib/libcurl.so
-  else
-    cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DTOOLBOX_DIR="${TOOLBOX_DIR}" -DCMAKE_C_FLAGS="-DTVU_SUPPORTED -DGGML_PERF -DGGML_TARGET_FPGA -DGGML_TSAVORITE" -DCMAKE_CXX_FLAGS="-DTVU_SUPPORTED -DGGML_PERF -DGGML_TARGET_FPGA -DGGML_TSAVORITE" -DCURL_INCLUDE_DIR=${ARM_TOOLCHAIN_PATH}/include  -DCURL_LIBRARY=${ARM_TOOLCHAIN_PATH}/lib/libcurl.so
-  fi
-
-  cmake --build build-fpga --config Release
+  build_fpga_tmu_disable
 
   local TSI_GGML_VERSION=0.2.8
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
