@@ -234,6 +234,11 @@ ollama stop llama3.2
 
 The `tsi-ollama-bundle.sh` script builds ollama with Tsavorite backend support for both POSIX and FPGA targets.
 
+## Installing Tsavorite Ollama
+
+The command `wget https://raw.githubusercontent.com/tsisw/ollama/main/tsi-ollama-install.sh -O - | sudo -E bash` in the terminal will install Ollama for you in your target
+
+
 ### Prerequisites
 
 - MLIR SDK installed (default: `/proj/rel/sw/sdk-r.0.2.3`)
