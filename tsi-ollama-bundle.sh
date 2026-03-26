@@ -460,7 +460,7 @@ resolve_paths() {
   local arch="$1"
 
   if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
-    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.9/${arch}}"
+    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.2.10/${arch}}"
     MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
   fi
   if [ -z "${TOOLBOX_DIR_IN}" ]; then
@@ -731,7 +731,7 @@ bundle_fpga() {
 
   log_info "creating tar bundle for fpga (${build_dir})"
 
-  local TSI_GGML_VERSION=0.2.9
+  local TSI_GGML_VERSION=0.2.10
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
   local GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
   local TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
@@ -843,7 +843,7 @@ build_ollama() {
 
   build_fpga_tmu_disable
 
-  local TSI_GGML_VERSION=0.2.9
+  local TSI_GGML_VERSION=0.2.10
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
   local GGML_TSI_INSTALL_DIR=llama/vendor/ggml-tsi-kernel
   local TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
