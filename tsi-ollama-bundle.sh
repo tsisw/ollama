@@ -841,7 +841,7 @@ build_ollama() {
   export CC="${ARM_COMPILER_PREFIX}gcc"
   export CXX="${ARM_COMPILER_PREFIX}g++"
 
-  build_fpga_tmu_disable
+  build_fpga
 
   local TSI_GGML_VERSION=0.2.10
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
