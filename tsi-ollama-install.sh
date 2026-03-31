@@ -75,7 +75,7 @@ status "Installing ollama to $OLLAMA_INSTALL_DIR"
 $SUDO install -o0 -g0 -m755 -d $BINDIR
 $SUDO install -o0 -g0 -m755 -d "$OLLAMA_INSTALL_DIR/lib/ollama"
 status "Downloading Linux ${ARCH} bundle"
-wget "https://github.com/tsisw/ollama/releases/download/v0.12.6-tsi-v0.0.12/ollama-arm64-release.tar.gz" -O ollama-arm64-release.tar.gz && \
+wget "https://github.com/tsisw/ollama/releases/download/v0.12.6-tsi-v0.0.13/ollama-arm64-release.tar.gz" -O ollama-arm64-release.tar.gz && \
     $SUDO tar -xvzf ollama-arm64-release.tar.gz -C "$OLLAMA_INSTALL_DIR"
 
 install_aot_ggml_lib_link() {
@@ -160,6 +160,7 @@ Restart=always
 RestartSec=3
 Environment="PATH=$PATH"
 Environment="LD_LIBRARY_PATH=/usr/bin/tsi/bin/aot-tests/lib/:/usr/local/ollama-arm64-release/lib/:/usr/local/ollama-arm64-release/bin/:${LD_LIBRARY_PATH:-}"
+Environment="OLLAMA_MODELS=/tsi/ollama-models/"
 [Install]
 WantedBy=default.target
 EOF
