@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"log"
 	"log/slog"
 	"github.com/ollama/ollama/runner/llamarunner"
 	"github.com/ollama/ollama/runner/ollamarunner"
