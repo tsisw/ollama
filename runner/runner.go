@@ -1,13 +1,15 @@
 package runner
 
 import (
-        "fmt"
+	"log"
+	"log/slog"
 	"github.com/ollama/ollama/runner/llamarunner"
 	"github.com/ollama/ollama/runner/ollamarunner"
 )
 
 func Execute(args []string) error {
-        fmt.Printf("RUNNER: Execute called, args=%v\n", args)
+	slog.Debug("RUNNER: Execute called", "args", args)
+
 	if args[0] == "runner" {
 		args = args[1:]
 	}
@@ -17,9 +19,12 @@ func Execute(args []string) error {
 		args = args[1:]
 		newRunner = true
 	}
+	// NOTE: Intentionally overriding --ollama-engine and forcing llama-runner.
+	// This is required to bypass the ollama-runner mmap code path, which skips
+	// load_all_data() and prevents backend-specific tensor materialization.
 	newRunner = false
 
-       fmt.Printf("RUNNER: forcing llama-runner\n")
+	slog.Debug("forcing llama-runner")
 	if newRunner {
 		return ollamarunner.Execute(args)
 	} else {
