@@ -236,13 +236,13 @@ The `tsi-ollama-bundle.sh` script builds ollama with Tsavorite backend support f
 
 ## Installing Tsavorite Ollama
 
-The command `wget https://raw.githubusercontent.com/tsisw/ollama/main/tsi-ollama-install.sh -O - | sudo -E bash` in the terminal will install Ollama for you in your target
+The command `wget https://raw.githubusercontent.com/tsisw/ollama/main/tsi-ollama-install.sh -O - | bash` in the terminal will install Ollama for you in your target
 
 
 ### Prerequisites
 
-- MLIR SDK installed (default: `/proj/rel/sw/sdk-r.0.2.3`)
-- Toolbox installed (default: `/proj/rel/sw/sdk-r.0.2.3/toolbox/build/install-fpga`)
+- MLIR SDK installed (default: `/proj/rel/sw/sdk-r.0.3.2`)
+- Toolbox installed (default: `/proj/rel/sw/sdk-r.0.3.2/${arch}/toolbox/build/install-fpga`)
 - Python 3.11.12 (for MLIR Python bindings)
 - GCC 13.3.0 module loaded
 - Go compiler (for ARM64 binary)
@@ -252,7 +252,7 @@ The command `wget https://raw.githubusercontent.com/tsisw/ollama/main/tsi-ollama
 #### Clean build artifacts
 
 ```bash
-./tsi-ollama-bundle.sh clean
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh clean
 ```
 
 This removes all build directories, Python virtual environments, and release artifacts:
@@ -264,7 +264,7 @@ This removes all build directories, Python virtual environments, and release art
 #### Build with default settings
 
 ```bash
-./tsi-ollama-bundle.sh
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh
 ```
 
 Builds with default performance flags for both POSIX and FPGA targets.
@@ -273,26 +273,26 @@ Builds with default performance flags for both POSIX and FPGA targets.
 
 ```bash
 # Release build (optimized)
-./tsi-ollama-bundle.sh release
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh release
 
 # Debug build (with detailed logging)
-./tsi-ollama-bundle.sh debug
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh debug
 
 # Apply patches first, then build
-./tsi-ollama-bundle.sh patch
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh patch
 ```
 
 #### Specify toolbox directory
 
 ```bash
 # Via command line argument
-./tsi-ollama-bundle.sh --toolbox-dir /path/to/toolbox/install-fpga
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh --toolbox-dir /path/to/toolbox/install-fpga
 
 # Via environment variable
 TOOLBOX_DIR=/path/to/toolbox/install-fpga ./tsi-ollama-bundle.sh
 
 # Short form
-./tsi-ollama-bundle.sh -t /path/to/toolbox/install-fpga
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh -t /path/to/toolbox/install-fpga
 ```
 
 **Priority order:** Command line argument > Environment variable > Default path
@@ -301,7 +301,7 @@ TOOLBOX_DIR=/path/to/toolbox/install-fpga ./tsi-ollama-bundle.sh
 
 ```bash
 # Clean and build release with custom toolbox
-./tsi-ollama-bundle.sh clean release --toolbox-dir /path/to/toolbox
+SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh clean release --toolbox-dir /path/to/toolbox
 ```
 
 ### What the script does

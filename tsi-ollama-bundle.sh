@@ -458,9 +458,14 @@ parse_args() {
 
 resolve_paths() {
   local arch="$1"
-
+  if [ -z "${SDK_VERSION}" ]; then
+     log_info "SDK_VERSION: not set, setting it to 0.3.2"
+     export SDK_VERSION=0.3.2
+  else
+     log_info "SDK_VERSION: ${SDK_VERSION}"
+  fi
   if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
-    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.0.3.2/${arch}}"
+    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.${SDK_VERSION}/${arch}}"
     MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
   fi
   if [ -z "${TOOLBOX_DIR_IN}" ]; then
@@ -962,12 +967,21 @@ main() {
   # Apply patches if the patches have not been applied and the first argument is patch otherwise just build
   if [ "$BUILD_TYPE" == "patch" ]
   then
-    echo "####################build type is patch llama cpp"
+    echo "build type is patch so applying llama.cpp patch"
     make -f Makefile.sync checkout
     cd llama/vendor
     git apply ../patches/tsi-consolidated-patches.patch
     cd ../../
     make -f Makefile.sync ml/backend/ggml/ggml
+  else
+    if [ ! -d "llama/vendor" ]; then
+      echo "llama/vendor does not exists and is empty so applying llama.cpp patch automatically"
+      make -f Makefile.sync checkout
+      cd llama/vendor
+      git apply ../patches/tsi-consolidated-patches.patch
+      cd ../../
+      make -f Makefile.sync ml/backend/ggml/ggml
+    fi
   fi
 
   if [ "${DO_CLEAN_ALL}" -eq 1 ]; then do_clean_all; return 0; fi
