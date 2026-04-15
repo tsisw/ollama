@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # This script installs TSI Ollama on ARM Linux. The script is primarily changes to only work for TSISW OLLAMA software
 
 set -eu
