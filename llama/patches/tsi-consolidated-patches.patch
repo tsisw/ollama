@@ -1967,12 +1967,12 @@ index 62d0ecd9..02e50a55 100644
  
  static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
 diff --git a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
-index 850d43e9..61d31275 100644
+index 73a2e91a..ccb9d1c6 100644
 --- a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
 +++ b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
-@@ -21,6 +21,12 @@
+@@ -24,6 +24,12 @@
+ #include <inttypes.h>
  #include <math.h>
- #include <string>
  #include <iostream>
 +#include <filesystem>
 +#include <fcntl.h>
@@ -1980,20 +1980,10 @@ index 850d43e9..61d31275 100644
 +#include <pthread.h>
 +#include <stdbool.h>
 +#include <stdio.h>
+ #include <magic_enum/magic_enum.hpp>
  #include "ggml-backend-impl.h"
  #include "ggml-impl.h"
- #include "ggml.h"
-@@ -40,7 +46,9 @@ static void ensure_tsi_runtime_initialized() {
-     std::string mainProfilerName = "OPU ";
-     tsirt::utils::TSIProfiler::initialize();
-     // TSI Run time Initalization
-+    GGML_TSAVORITE_LOG_INFO("TSI initialize in registration\n");
-     tsi_initialize(NUM_OF_TXES, NULL);
-+    GGML_TSAVORITE_LOG_INFO("TSI initialized in registration\n");
-     runtime_initialized = true;
-     GGML_TSAVORITE_LOG_INFO("Profiler and TSI runtime initialized early in registration\n");
-   }
-@@ -751,6 +759,21 @@ tsi_cleanup() {
+@@ -1384,6 +1390,21 @@ tsi_cleanup() {
      return;
  }
  
@@ -2015,7 +2005,7 @@ index 850d43e9..61d31275 100644
  #if 0
  // finds the tSavorite buffer that contains the tensor data on the TXE device unified memory
  // the assumption is that there is 1-to-1 mapping between the host and device memory buffers, so we can find the
-@@ -1852,6 +1875,11 @@ static struct ggml_backend_i ggml_backend_tsavorite_i = {
+@@ -3134,6 +3155,11 @@ static struct ggml_backend_i ggml_backend_tsavorite_i = {
      /* .graph_compute           = */ ggml_backend_tsavorite_graph_compute,
      /* .event_record            = */ NULL,
      /* .event_wait              = */ NULL,
@@ -2027,7 +2017,7 @@ index 850d43e9..61d31275 100644
  };
  
  static ggml_guid_t ggml_backend_tsavorite_guid(void) {
-@@ -2249,14 +2277,47 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
+@@ -3543,14 +3569,48 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
      /* .get_proc_address = */ NULL,
  };
  
@@ -2058,7 +2048,7 @@ index 850d43e9..61d31275 100644
    ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
    ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
    GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
--  ensure_tsi_runtime_initialized();
+   ensure_tsi_runtime_initialized();
 +
 +  init_shared_state();
 +

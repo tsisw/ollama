@@ -459,13 +459,13 @@ parse_args() {
 resolve_paths() {
   local arch="$1"
   if [ -z "${SDK_VERSION}" ]; then
-     log_info "SDK_VERSION: not set, setting it to 0.3.2"
-     export SDK_VERSION=0.3.2
+     log_info "SDK_VERSION: not set, setting it to 0.4.0"
+     export SDK_VERSION=0.4.0
   else
      log_info "SDK_VERSION: ${SDK_VERSION}"
   fi
   if [ -z "${MLIR_COMPILER_DIR_IN}" ]; then
-    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/sdk-r.${SDK_VERSION}/${arch}}"
+    MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${arch}}"
     MLIR_COMPILER_DIR_IN="${MLIR_SDK_VERSION}/compiler"
   fi
   if [ -z "${TOOLBOX_DIR_IN}" ]; then
@@ -736,7 +736,7 @@ bundle_fpga() {
 
   log_info "creating tar bundle for fpga (${build_dir})"
 
-  local TSI_GGML_VERSION=0.3.2
+  local TSI_GGML_VERSION=0.4.0
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
   local GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
   local TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
