@@ -1967,7 +1967,7 @@ index 62d0ecd9..02e50a55 100644
  
  static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
 diff --git a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
-index 73a2e91a..ccb9d1c6 100644
+index 6b61b6a0..e0dfeeb4 100644
 --- a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
 +++ b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
 @@ -24,6 +24,12 @@
@@ -1980,11 +1980,11 @@ index 73a2e91a..ccb9d1c6 100644
 +#include <pthread.h>
 +#include <stdbool.h>
 +#include <stdio.h>
- #include <magic_enum/magic_enum.hpp>
- #include "ggml-backend-impl.h"
- #include "ggml-impl.h"
-@@ -1384,6 +1390,21 @@ tsi_cleanup() {
-     return;
+ #include <fstream>
+ #include <cctype>
+ #include <cstdlib>
+@@ -3434,6 +3440,21 @@ static void ggml_backend_tsavorite_set_n_cb(ggml_backend_t backend, int n_cb) {
+   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
  }
  
 +void
@@ -2002,10 +2002,10 @@ index 73a2e91a..ccb9d1c6 100644
 +    return;
 +}
 +
- #if 0
- // finds the tSavorite buffer that contains the tensor data on the TXE device unified memory
- // the assumption is that there is 1-to-1 mapping between the host and device memory buffers, so we can find the
-@@ -3134,6 +3155,11 @@ static struct ggml_backend_i ggml_backend_tsavorite_i = {
+ static struct ggml_backend_i ggml_backend_tsavorite_i = {
+     /* .get_name                = */ ggml_backend_tsavorite_name,
+     /* .free                    = */ ggml_backend_tsavorite_free,
+@@ -3448,6 +3469,11 @@ static struct ggml_backend_i ggml_backend_tsavorite_i = {
      /* .graph_compute           = */ ggml_backend_tsavorite_graph_compute,
      /* .event_record            = */ NULL,
      /* .event_wait              = */ NULL,
@@ -2017,7 +2017,7 @@ index 73a2e91a..ccb9d1c6 100644
  };
  
  static ggml_guid_t ggml_backend_tsavorite_guid(void) {
-@@ -3543,14 +3569,48 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
+@@ -3857,14 +3883,46 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
      /* .get_proc_address = */ NULL,
  };
  
@@ -2043,12 +2043,12 @@ index 73a2e91a..ccb9d1c6 100644
 +      return;
 +  }
 +}
- 
+
  ggml_backend_reg_t ggml_backend_tsavorite_reg(void) {
    ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
    ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
    GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
-   ensure_tsi_runtime_initialized();
+-  ensure_tsi_runtime_initialized();
 +
 +  init_shared_state();
 +
@@ -2059,7 +2059,6 @@ index 73a2e91a..ccb9d1c6 100644
 +      state->init_done = true;
 +      GGML_LOG_DEBUG("%s: Initialization not done, proceeding...\n", __func__);
 +  }
-+
    g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
    g_ggml_backend_tsavorite_reg.context = NULL;
 +  g_ggml_backend_tsavorite_reg.api_version = GGML_BACKEND_API_VERSION;

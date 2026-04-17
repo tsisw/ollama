@@ -769,6 +769,23 @@ EOL
   cp "${build_dir}/bin/libllama"*.so "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
   cp "${build_dir}/bin/simple-backend-tsi" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
 
+  # REQUIRED ADDITION: include tsavorite-model-deployment.yaml in same dir as .so
+  local yaml_src=""
+  if [ -n "${TSAVORITE_DEPLOYMENT_YAML_SRC:-}" ]; then
+    yaml_src="${TSAVORITE_DEPLOYMENT_YAML_SRC}"
+  elif [ -f "./tsavorite-model-deployment.yaml" ]; then
+    yaml_src="./tsavorite-model-deployment.yaml"
+  elif [ -n "${__TSI_SCRIPT_DIR}" ] && [ -f "${__TSI_SCRIPT_DIR}/tsavorite-model-deployment.yaml" ]; then
+    yaml_src="${__TSI_SCRIPT_DIR}/tsavorite-model-deployment.yaml"
+  fi
+
+  if [ -n "${yaml_src}" ]; then
+    cp "${yaml_src}" "${TSI_GGML_BUNDLE_INSTALL_DIR}/tsavorite-model-deployment.yaml" || return 1
+    log_info "included tsavorite-model-deployment.yaml from: ${yaml_src}"
+  else
+    log_info "WARNING: tsavorite-model-deployment.yaml not found; bundle will not include it (set TSAVORITE_DEPLOYMENT_YAML_SRC to override)."
+  fi
+
   tar -cvzf "${TSI_GGML_BUNDLE_INSTALL_DIR}-${TSI_GGML_VERSION}.tz" "${TSI_GGML_BUNDLE_INSTALL_DIR}"/* || return 1
 
   if [ "$(tolower "$BUILD_TYPE")" = "release" ]; then
@@ -833,6 +850,8 @@ build_ollama() {
   cp build-posix/lib/ollama/libggml-*.so ${RELEASE_DIR_X86}/lib 2>/dev/null || echo "No posix libraries found"
   cp -r lib $RELEASE_DIR_X86/ 2>/dev/null || echo "No lib directory to copy"
   cp README.md $RELEASE_DIR_X86/ 2>/dev/null || echo "No README.md to copy"
+
+  cp llama/vendor/tsavorite-model-deployment.yaml $RELEASE_DIR_X86/bin/ || return 1
 
   # Create x86_64 tarball
   echo "Creating x86_64 tarball..."
@@ -918,6 +937,8 @@ EOL
   cp -r lib $RELEASE_DIR/ 2>/dev/null || echo "No lib directory to copy"
   cp README.md $RELEASE_DIR/ 2>/dev/null || echo "No README.md to copy"
   cp -r tsi-ggml $RELEASE_DIR/ 2>/dev/null || echo "No tsi-ggml-ollama*.tz to copy"
+
+  cp llama/vendor/tsavorite-model-deployment.yaml $RELEASE_DIR/bin/ || return 1
 
   # Create tarball
   echo "Creating Release tarball..."
