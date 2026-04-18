@@ -870,9 +870,10 @@ build_ollama() {
   local TSI_GGML_VERSION=0.2.12
   local TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
   local GGML_TSI_INSTALL_DIR=llama/vendor/ggml-tsi-kernel
+  local GGML_ML_INSTALL_DIR=ml/backend/ggml
   local TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml
   local TSI_BLOB_INSTALL_DIR=$(pwd)/${GGML_TSI_INSTALL_DIR}/fpga-kernel/build-fpga
-
+  local ML_BLOB_INSTALL_DIR=$(pwd)/${GGML_ML_INSTALL_DIR}
   if [ -e ${TSI_GGML_BUNDLE_INSTALL_DIR} ]; then
      echo "${TSI_GGML_BUNDLE_INSTALL_DIR} exist"
   else
@@ -894,6 +895,8 @@ build_ollama() {
       mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel
       cp --parent blobs/txe_\$kernel*.blob ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel/ -r
     done
+    mkdir -p ${ML_BLOB_INSTALL_DIR}
+    ln -s $(pwd)/${GGML_TSI_INSTALL_DIR} ${ML_BLOB_INSTALL_DIR}
 EOL
   chmod +x ${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh
   cp ${GGML_TSI_INSTALL_DIR}/fpga/blobs ${TSI_GGML_BUNDLE_INSTALL_DIR}/ -r
