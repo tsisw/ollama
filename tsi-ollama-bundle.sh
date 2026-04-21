@@ -892,8 +892,8 @@ build_ollama() {
     tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm"  "swiglu" "add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16" "swiglu_16" "mul_mat_tile_f32_k128" "mul_mat_tile_f32_k64" "mul_mat_tile_f32_k32")
 
     for kernel in "\${tsi_kernels[@]}"; do
-      mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel
-      cp --parent blobs/txe_\$kernel*.blob ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel/ -r
+      mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel/blobs/
+      ln -s \$(pwd)/blobs/txe_\$kernel.blob ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel/blobs/txe_\$kernel.blob
     done
     mkdir -p ${ML_BLOB_INSTALL_DIR}
     ln -s $(pwd)/${GGML_TSI_INSTALL_DIR} ${ML_BLOB_INSTALL_DIR}
