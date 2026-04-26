@@ -625,7 +625,7 @@ build_posix_impl() {
 
   compute_perf_and_debug_defs "posix"
 
-  local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF"
+  local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF-DOLLAMA=ON"
 
   local supported=""
   [ "${want_tmu}" -eq 1 ] && supported="${supported} -DTMU_SUPPORTED"
@@ -699,7 +699,7 @@ build_fpga_impl() {
     -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" -DTOOLBOX_DIR="${TOOLBOX_DIR}" \
     -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DLLAMA_CURL=OFF \
     -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
-    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported}" \
+    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE ${supported} -DOLLAMA=ON" \
     ${ENABLE_COVERAGE_FLAG} || return 1
 
   run cmake --build "${build_dir}" --config Release || return 1
