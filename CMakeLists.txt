@@ -129,6 +129,7 @@ if (GGML_TSAVORITE)
     include_directories(${MLIR_COMPILER_DIR}/include/tsi-rt/shim)
     include_directories(${RUNTIME_DIR}/include)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ml/backend/ggml/ggml/src/ggml-tsavorite/include)
+    include_directories(${MLIR_COMPILER_DIR}/../toolbox/build/install-fpga/include)
     message("tsavorite backend is enabled")
 endif()
 
