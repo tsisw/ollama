@@ -476,6 +476,9 @@ resolve_paths() {
   MLIR_COMPILER_DIR="$(absdir "${MLIR_COMPILER_DIR_IN}")" || die "MLIR_COMPILER_DIR not found: ${MLIR_COMPILER_DIR_IN}"
   TOOLBOX_DIR="$(absdir "${TOOLBOX_DIR_IN}")" || die "TOOLBOX_DIR not found: ${TOOLBOX_DIR_IN}"
 
+  TSICommon_DIR=${TOOLBOX_DIR}/lib/cmake/TSICommon/
+  export TSICommon_DIR
+
   export MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-$(dirname "${MLIR_COMPILER_DIR}")}"
   export MLIR_COMPILER_DIR
   export COMPILER_INSTALL_DIR="${MLIR_COMPILER_DIR}"
@@ -484,6 +487,7 @@ resolve_paths() {
 
   log_info "MLIR_COMPILER_DIR: ${MLIR_COMPILER_DIR}"
   log_info "TOOLBOX_DIR: ${TOOLBOX_DIR}"
+  log_info "TSICommon_DIR: ${TSICommon_DIR}"
 }
 
 setup_toolchain() {
@@ -861,9 +865,9 @@ build_ollama() {
   echo 'building llama.cp, ggml for tsavorite  and other binary for fpga'
   # Source toolbox ARM toolchain environment
   echo "Using TOOLBOX_DIR: ${TOOLBOX_DIR}"
-  source "${TOOLBOX_DIR}/scripts/arm-toolchain-env.sh"
-  export CC="${ARM_COMPILER_PREFIX}gcc"
-  export CXX="${ARM_COMPILER_PREFIX}g++"
+  export CMAKE_TOOLCHAIN_FILE="${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake"
+  export CC=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc
+  export CXX=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++
 
   build_fpga
 
