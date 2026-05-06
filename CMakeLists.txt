@@ -34,7 +34,6 @@ if (GGML_TSAVORITE AND ${GGML_TSAVORITE_TARGET} STREQUAL fpga)
     if (EXISTS "${TOOLBOX_TOOLCHAIN_FILE}")
         # Include the ARM toolchain configuration
         # This sets CMAKE_C_COMPILER, CMAKE_CXX_COMPILER, CMAKE_AR, CMAKE_STRIP, and CMAKE_FIND_ROOT_PATH
-        include("${TOOLBOX_TOOLCHAIN_FILE}")
         message(STATUS "Using ARM toolchain from toolbox: ${TOOLBOX_DIR}")
         message(STATUS "ARM C compiler: ${CMAKE_C_COMPILER}")
         message(STATUS "ARM CXX compiler: ${CMAKE_CXX_COMPILER}")
@@ -236,4 +235,39 @@ if(Vulkan_FOUND)
         RUNTIME DESTINATION ${OLLAMA_INSTALL_DIR} COMPONENT Vulkan
         LIBRARY DESTINATION ${OLLAMA_INSTALL_DIR} COMPONENT Vulkan
     )
+endif()
+
+
+set(GO_EXECUTABLE /proj/local/go/bin/go CACHE FILEPATH "Go executable")
+
+if (GGML_TSAVORITE_TARGET STREQUAL "posix")
+
+  add_custom_target(ollama ALL
+      COMMAND
+          ${CMAKE_COMMAND} -E env
+          CGO_ENABLED=1
+          GOOS=linux
+          GOARCH=amd64
+          CC=
+          CXX=
+          ${GO_EXECUTABLE} build -o ${CMAKE_BINARY_DIR}/ollama .
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Building Go binary for x86_64"
+  )
+
+elseif (GGML_TSAVORITE_TARGET STREQUAL "fpga")
+
+  add_custom_target(ollama ALL
+      COMMAND
+          ${CMAKE_COMMAND} -E env
+          CGO_ENABLED=1
+          GOOS=linux
+          GOARCH=arm64
+          CC=${CMAKE_C_COMPILER}
+          CXX=${CMAKE_CXX_COMPILER}
+          ${GO_EXECUTABLE} build -o ${CMAKE_BINARY_DIR}/ollama .
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Building Go binary for ARM64"
+  )
+
 endif()

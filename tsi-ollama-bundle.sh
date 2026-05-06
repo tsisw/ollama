@@ -811,8 +811,6 @@ EOL
 # build go code of ollama
 # -------------------------
 build_ollama() {
-#  local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE ${supported} -mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
-#  local common=" -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF -DGGML_CPU_ALDERLAKE=OFF"
   cd ../../
   #Compile for posix & fpga with build-posix as a target folder
 
@@ -836,8 +834,6 @@ build_ollama() {
     export CXX=/proj/local/gcc-13.3.0/bin/g++
   fi
 
-  GOARCH=amd64 GOOS=linux CGO_ENABLED=1 go build -o ollama-x86_64 .
-
   # Prepare x86_64 release directory
   RELEASE_DIR_X86="ollama-x86_64-release"
   TARBALL_X86="ollama-x86_64-release.tar.gz"
@@ -848,7 +844,7 @@ build_ollama() {
   mkdir -p $RELEASE_DIR_X86/bin
   mkdir -p $RELEASE_DIR_X86/lib
 
-  cp ollama-x86_64 $RELEASE_DIR_X86/bin/ollama
+  cp build-posix/ollama $RELEASE_DIR_X86/bin/ollama
   cp llama/vendor/ggml-tsi-kernel/posix-kernel/build-posix/blobs ${RELEASE_DIR_X86}/ -r 2>/dev/null || echo "No posix blobs found"
   cp build-posix/lib/ollama/libggml-*.so ${RELEASE_DIR_X86}/bin 2>/dev/null || echo "No posix libraries found"
   cp build-posix/lib/ollama/libggml-*.so ${RELEASE_DIR_X86}/lib 2>/dev/null || echo "No posix libraries found"
@@ -866,8 +862,6 @@ build_ollama() {
   # Source toolbox ARM toolchain environment
   echo "Using TOOLBOX_DIR: ${TOOLBOX_DIR}"
   export CMAKE_TOOLCHAIN_FILE="${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake"
-  export CC=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc
-  export CXX=/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++
 
   build_fpga
 
@@ -925,18 +919,12 @@ EOL
   RELEASE_DIR="ollama-arm64-release"
   TARBALL="ollama-arm64-release.tar.gz"
 
-  # Build Go binary for ARM64
-  echo "Building Go binary for ARM64..."
-  export CGO_ENABLED=1
-  export PATH=$PATH:/proj/local/go/bin
-  GOARCH=arm64 GOOS=linux go build -o ollama .
-
   # Prepare release directory
   echo "Preparing release directory..."
   rm -rf $RELEASE_DIR
   mkdir -p $RELEASE_DIR/bin
   mkdir -p $RELEASE_DIR/lib
-  cp ollama $RELEASE_DIR/bin/
+  cp build-fpga/ollama $RELEASE_DIR/bin/
   cp llama/vendor/ggml-tsi-kernel/fpga/blobs ${RELEASE_DIR}/ -r
   cp build-fpga/lib/ollama/libggml-*.so ${RELEASE_DIR}/bin
   cp build-fpga/lib/ollama/libggml-*.so ${RELEASE_DIR}/lib
