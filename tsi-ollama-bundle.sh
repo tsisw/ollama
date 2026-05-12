@@ -132,7 +132,7 @@
 
 log_error(){ echo "ERROR: $*" >&2; }
 log_info(){ echo "INFO: $*"; }
-
+set -e
 __TSI_SOURCED=0
 (return 0 2>/dev/null) && __TSI_SOURCED=1
 
@@ -770,7 +770,7 @@ EOL
   cp "${GGML_TSI_INSTALL_DIR}/fpga/blobs" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" -r || return 1
   cp "${build_dir}/bin/llama-cli" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
   cp "${build_dir}/bin/libggml"*.so "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
-  cp "${build_dir}/bin/libllama"*.so "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
+  cp "${build_dir}/bin/lib"*.so* "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
   cp "${build_dir}/bin/simple-backend-tsi" "${TSI_GGML_BUNDLE_INSTALL_DIR}/" || return 1
 
   # REQUIRED ADDITION: include tsavorite-model-deployment.yaml in same dir as .so
@@ -986,7 +986,7 @@ main() {
     echo "build type is patch so applying llama.cpp patch"
     make -f Makefile.sync checkout
     cd llama/vendor
-    git apply ../patches/tsi-consolidated-patches.patch
+    git apply ../patches/tsi-consolidated-patches.newpatch
     cd ../../
     make -f Makefile.sync ml/backend/ggml/ggml
   else
@@ -994,7 +994,7 @@ main() {
       echo "llama/vendor does not exists and is empty so applying llama.cpp patch automatically"
       make -f Makefile.sync checkout
       cd llama/vendor
-      git apply ../patches/tsi-consolidated-patches.patch
+      git apply ../patches/tsi-consolidated-patches.newpatch
       cd ../../
       make -f Makefile.sync ml/backend/ggml/ggml
     fi
