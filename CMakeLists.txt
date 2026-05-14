@@ -459,12 +459,31 @@ endif()
 
 set(GO_EXECUTABLE /proj/local/go/bin/go CACHE FILEPATH "Go executable")
 
+set(LLAMA_INCLUDE_DIRS
+    ${CMAKE_SOURCE_DIR}/llama/vendor/common/
+    ${CMAKE_SOURCE_DIR}/llama/vendor/tools/mtmd/
+    ${CMAKE_SOURCE_DIR}/llama/llama.cpp/common
+    ${CMAKE_SOURCE_DIR}/llama/llama.cpp/src
+    ${CMAKE_SOURCE_DIR}/llama/llama.cpp/src/models
+)
+
+
+set(CGO_CFLAGS_VALUE "")
+foreach(dir IN LISTS LLAMA_INCLUDE_DIRS)
+    string(APPEND CGO_CFLAGS_VALUE " -I${dir}")
+endforeach()
+string(STRIP "${CGO_CFLAGS_VALUE}" CGO_CFLAGS_VALUE)
+
+string(JOIN " " CGO_LDFLAGS_VALUE ${CGO_LDFLAGS_VALUE})
+
 if (GGML_TSAVORITE_TARGET STREQUAL "posix")
 
   add_custom_target(ollama ALL
       COMMAND
           ${CMAKE_COMMAND} -E env
           CGO_ENABLED=1
+          "CGO_CFLAGS=${CGO_CFLAGS_VALUE}"
+          "CGO_CXXFLAGS=${CGO_CFLAGS_VALUE}"
           GOOS=linux
           GOARCH=amd64
           CC=
@@ -480,6 +499,8 @@ elseif (GGML_TSAVORITE_TARGET STREQUAL "fpga")
       COMMAND
           ${CMAKE_COMMAND} -E env
           CGO_ENABLED=1
+          "CGO_CFLAGS=${CGO_CFLAGS_VALUE}"
+          "CGO_CXXFLAGS=${CGO_CFLAGS_VALUE}"
           GOOS=linux
           GOARCH=arm64
           CC=${CMAKE_C_COMPILER}
