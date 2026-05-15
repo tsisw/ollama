@@ -986,17 +986,21 @@ main() {
     echo "build type is patch so applying llama.cpp patch"
     make -f Makefile.sync checkout
     cd llama/vendor
-    git apply ../patches/tsi-consolidated-patches.patch
+    #git apply ../patches/tsi-consolidated-patches.patch
+    git apply ../patches/tsi-patches.patch
     cd ../../
     make -f Makefile.sync ml/backend/ggml/ggml
+    make -f Makefile.sync llama/llama.cpp
   else
     if [ ! -d "llama/vendor" ]; then
       echo "llama/vendor does not exists and is empty so applying llama.cpp patch automatically"
       make -f Makefile.sync checkout
       cd llama/vendor
-      git apply ../patches/tsi-consolidated-patches.patch
+      #git apply ../patches/tsi-consolidated-patches.patch
+      git apply ../patches/tsi-patches.patch
       cd ../../
       make -f Makefile.sync ml/backend/ggml/ggml
+      make -f Makefile.sync llama/llama.cpp
     fi
   fi
 

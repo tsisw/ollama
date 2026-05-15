@@ -1,0 +1,866 @@
+diff --git a/common/json-schema-to-grammar.cpp b/common/json-schema-to-grammar.cpp
+index e2c4d6ce2..9df16a8ce 100644
+--- a/common/json-schema-to-grammar.cpp
++++ b/common/json-schema-to-grammar.cpp
+@@ -315,7 +315,7 @@ private:
+     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
+     std::function<json(const std::string &)> _fetch_json;
+     bool _dotall;
+-    std::map<std::string, std::string> _rules;
++    std::unordered_map<std::string, std::string> _rules;
+     std::unordered_map<std::string, json> _refs;
+     std::unordered_set<std::string> _refs_being_resolved;
+     std::vector<std::string> _errors;
+diff --git a/ggml/include/ggml-alloc.h b/ggml/include/ggml-alloc.h
+index 78aa059dd..7fa8403b3 100644
+--- a/ggml/include/ggml-alloc.h
++++ b/ggml/include/ggml-alloc.h
+@@ -72,6 +72,7 @@ GGML_API bool ggml_gallocr_reserve_n(
+ GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph);
+ 
+ GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id);
++GGML_API size_t ggml_gallocr_get_attempted_buffer_size(ggml_gallocr_t galloc, int buffer_id);
+ 
+ // Utils
+ // Create a buffer and allocate all the tensors in a ggml_context
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index d0c7e5a1b..0d30fe4b4 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -77,6 +77,7 @@ extern "C" {
+     GGML_API ggml_guid_t  ggml_backend_guid(ggml_backend_t backend);
+     GGML_API const char * ggml_backend_name(ggml_backend_t backend);
+     GGML_API void         ggml_backend_free(ggml_backend_t backend);
++    GGML_API void         ggml_backend_log_profile_info(ggml_backend_t backend);
+ 
+     GGML_API ggml_backend_buffer_type_t ggml_backend_get_default_buffer_type(ggml_backend_t backend);
+     GGML_API ggml_backend_buffer_t      ggml_backend_alloc_buffer(ggml_backend_t backend, size_t size);
+@@ -102,7 +103,7 @@ extern "C" {
+ 
+     GGML_API enum ggml_status ggml_backend_graph_plan_compute (ggml_backend_t backend, ggml_backend_graph_plan_t plan);
+     GGML_API enum ggml_status ggml_backend_graph_compute      (ggml_backend_t backend, struct ggml_cgraph * cgraph);
+-    GGML_API enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph);
++    GGML_API enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph, int batch_size);
+ 
+     // NOTE: will be removed, use device version instead
+     GGML_API bool ggml_backend_supports_op(ggml_backend_t backend, const struct ggml_tensor * op);
+@@ -183,6 +184,7 @@ extern "C" {
+     GGML_API void                          ggml_backend_dev_get_props(ggml_backend_dev_t device, struct ggml_backend_dev_props * props);
+     GGML_API ggml_backend_reg_t            ggml_backend_dev_backend_reg(ggml_backend_dev_t device);
+     GGML_API ggml_backend_t                ggml_backend_dev_init(ggml_backend_dev_t device, const char * params);
++    GGML_API void                          ggml_backend_dev_reset(ggml_backend_dev_t device);
+     GGML_API ggml_backend_buffer_type_t    ggml_backend_dev_buffer_type(ggml_backend_dev_t device);
+     GGML_API ggml_backend_buffer_type_t    ggml_backend_dev_host_buffer_type(ggml_backend_dev_t device);
+     GGML_API ggml_backend_buffer_t         ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size, size_t max_tensor_size);
+@@ -315,8 +317,12 @@ extern "C" {
+ 
+     // Initialize a backend scheduler, backends with low index are given priority over backends with high index
+     GGML_API ggml_backend_sched_t ggml_backend_sched_new(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel, bool op_offload);
++    GGML_API ggml_backend_sched_t ggml_backend_sched_new_ext(ggml_backend_t * backends, ggml_backend_buffer_type_t * bufts, int n_backends, size_t graph_size, bool parallel, bool op_offload, bool alloc_buffers);
+     GGML_API void                 ggml_backend_sched_free(ggml_backend_sched_t sched);
+ 
++    // Provide a hint on the batch size to optimize processing (uses heuristics if unset)
++    GGML_API void                 ggml_backend_sched_set_batch_size(ggml_backend_sched_t sched, int batch_size);
++
+     // Initialize backend buffers from a measure graph
+     GGML_API void                 ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes);
+     GGML_API bool                 ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph); // returns success
+@@ -330,6 +336,7 @@ extern "C" {
+ 
+     GGML_API ggml_backend_buffer_type_t ggml_backend_sched_get_buffer_type(ggml_backend_sched_t sched, ggml_backend_t backend);
+     GGML_API size_t                     ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend);
++    GGML_API size_t                     ggml_backend_sched_get_attempted_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend);
+ 
+     GGML_API void                 ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend);
+     GGML_API ggml_backend_t       ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node);
+diff --git a/ggml/src/ggml-alloc.c b/ggml/src/ggml-alloc.c
+index a4b01ccf8..eef22aee1 100644
+--- a/ggml/src/ggml-alloc.c
++++ b/ggml/src/ggml-alloc.c
+@@ -481,6 +481,7 @@ struct node_alloc {
+ struct ggml_gallocr {
+     ggml_backend_buffer_type_t * bufts; // [n_buffers]
+     struct vbuffer ** buffers; // [n_buffers]
++    size_t *buffer_sizes; // [n_buffers]
+     struct ggml_dyn_tallocr ** buf_tallocs; // [n_buffers]
+     int n_buffers;
+ 
+@@ -504,6 +505,9 @@ ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs
+     galloc->buffers = calloc(n_bufs, sizeof(struct vbuffer *));
+     GGML_ASSERT(galloc->buffers != NULL);
+ 
++    galloc->buffer_sizes = calloc(n_bufs, sizeof(size_t));
++    GGML_ASSERT(galloc->buffer_sizes != NULL);
++
+     galloc->buf_tallocs = calloc(n_bufs, sizeof(struct ggml_dyn_tallocr *));
+     GGML_ASSERT(galloc->buf_tallocs != NULL);
+ 
+@@ -571,6 +575,7 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
+     ggml_hash_set_free(&galloc->hash_set);
+     free(galloc->hash_values);
+     free(galloc->bufts);
++    free(galloc->buffer_sizes);
+     free(galloc->buffers);
+     free(galloc->buf_tallocs);
+     free(galloc->node_allocs);
+@@ -900,6 +905,8 @@ static bool ggml_gallocr_reserve_n_impl(
+         }
+     }
+ 
++    bool success = true;
++
+     // reallocate buffers if needed
+     for (int i = 0; i < galloc->n_buffers; i++) {
+         // if the buffer type is used multiple times, we reuse the same buffer
+@@ -936,15 +943,20 @@ static bool ggml_gallocr_reserve_n_impl(
+                 galloc->buffers[i] = NULL;
+             } else {
+                 galloc->buffers[i] = ggml_vbuffer_alloc(galloc->bufts[i], galloc->buf_tallocs[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+-                if (galloc->buffers[i] == NULL) {
++                if (galloc->buffers[i]) {
++                    galloc->buffer_sizes[i] = ggml_vbuffer_size(galloc->buffers[i]);
++                } else {
+                     GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(galloc->bufts[i]), new_size);
+-                    return false;
++                    galloc->buffer_sizes[i] = new_size;
++                    success = false;
+                 }
+             }
+-        }
+-    }
++        } else {
++            galloc->buffer_sizes[i] = ggml_vbuffer_size(galloc->buffers[i]);
++	}
++     }
+ 
+-    return true;
++    return success;
+ }
+ 
+ void ggml_gallocr_reserve_n_size(
+@@ -1114,6 +1126,22 @@ size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id) {
+     return ggml_vbuffer_size(galloc->buffers[buffer_id]);
+ }
+ 
++size_t ggml_gallocr_get_attempted_buffer_size(ggml_gallocr_t galloc, int buffer_id) {
++    GGML_ASSERT(buffer_id >= 0 && buffer_id < galloc->n_buffers);
++
++    for (int i = 0; i < buffer_id; i++) {
++        if (galloc->buf_tallocs[i] == galloc->buf_tallocs[buffer_id]) {
++            // This buffer is the same as a previous one due to the same buffer type being used multiple times
++            // (See above.) However, we need a different check because multiple buffers might be NULL in our
++            // case and we still want to know the attempted size.
++
++            return 0;
++        }
++    }
++
++    return galloc->buffer_sizes[buffer_id];
++}
++
+ // utils
+ 
+ static void free_buffers(ggml_backend_buffer_t ** buffers, const size_t * n_buffers) {
+diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
+index 9c56ec30c..84f24beb2 100644
+--- a/ggml/src/ggml-backend-impl.h
++++ b/ggml/src/ggml-backend-impl.h
+@@ -26,12 +26,16 @@ extern "C" {
+         size_t                (*get_alloc_size)(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
+         // (optional) check if tensor data is in host memory and uses standard ggml tensor layout (defaults to false)
+         bool                  (*is_host)       (ggml_backend_buffer_type_t buft);
++        // (optional) returns a dummy buffer that is equivalent to one created by alloc_buffer but without actually being backed
++        // by memory
++        ggml_backend_buffer_t (*noalloc_buffer)(ggml_backend_buffer_type_t buft, size_t size);
+     };
+ 
+     struct ggml_backend_buffer_type {
+         struct ggml_backend_buffer_type_i  iface;
+         ggml_backend_dev_t device;
+         void * context;
++        bool no_alloc;
+     };
+ 
+     //
+@@ -67,6 +71,7 @@ extern "C" {
+         void * context;
+         size_t size;
+         enum ggml_backend_buffer_usage usage;
++        bool no_alloc;
+     };
+ 
+     GGML_API ggml_backend_buffer_t ggml_backend_buffer_init(
+@@ -126,8 +131,8 @@ extern "C" {
+         // compute the graph with the plan
+         enum ggml_status          (*graph_plan_compute)(ggml_backend_t backend, ggml_backend_graph_plan_t plan);
+ 
+-        // compute graph (always async if supported by the backend)
+-        enum ggml_status          (*graph_compute)     (ggml_backend_t backend, struct ggml_cgraph * cgraph);
++        // compute graph (always async if supported by the backend). batch_size may be -1 if unknown
++        enum ggml_status          (*graph_compute)     (ggml_backend_t backend, struct ggml_cgraph * cgraph, int batch_size);
+ 
+         // (optional) event synchronization
+         // record an event on this stream
+@@ -137,6 +142,17 @@ extern "C" {
+ 
+         // (optional) sort/optimize the nodes in the graph
+         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
++
++        // (optional) reserves intermediate buffers needed for the compution
++        // if alloc is true, memory is actually allocated, otherwise the required amount is just returned by buffer_size
++        enum ggml_status          (*graph_reserve)     (ggml_backend_t backend, struct ggml_cgraph * cgraph, bool alloc);
++
++        // (optional) returns the memory needed after calling graph_reserve
++        size_t                    (*buffer_size)       (ggml_backend_t backend);
++
++        // (optional) frees memory from intermediate buffers that was allocated either by graph_compute or graph_reserve
++        void                      (*reset)             (ggml_backend_t backend);
++        void                      (*profile)           ();
+     };
+ 
+     struct ggml_backend {
+@@ -199,6 +215,10 @@ extern "C" {
+         ggml_backend_event_t (*event_new)         (ggml_backend_dev_t dev);
+         void                 (*event_free)        (ggml_backend_dev_t dev, ggml_backend_event_t event);
+         void                 (*event_synchronize) (ggml_backend_dev_t dev, ggml_backend_event_t event);
++
++	// (optional) reset device, clearing existing allocations and context
++        // the caller must ensure that there are no outstanding buffers, as these will become invalid
++        void (*reset)(ggml_backend_dev_t dev);
+     };
+ 
+     struct ggml_backend_device {
+diff --git a/ggml/src/ggml-backend-meta.cpp b/ggml/src/ggml-backend-meta.cpp
+index 41a61775b..ac4a86801 100644
+--- a/ggml/src/ggml-backend-meta.cpp
++++ b/ggml/src/ggml-backend-meta.cpp
+@@ -1669,7 +1669,7 @@ static void ggml_backend_meta_synchronize(ggml_backend_t backend) {
+     }
+ }
+ 
+-static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
++static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph, int batch_size) {
+     GGML_ASSERT(cgraph->grads == nullptr);
+     const size_t n_backends = ggml_backend_meta_n_backends(backend);
+     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
+@@ -1950,7 +1950,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend,
+             step_cgraphs[j] = get_cgraph_aux();
+             step_cgraphs[j]->nodes[0] = node_zero;
+             step_cgraphs[j]->n_nodes = 1;
+-            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, step_cgraphs[j]);
++            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, step_cgraphs[j], -1);
+             if (status != GGML_STATUS_SUCCESS) {
+                 return status;
+             }
+@@ -1998,7 +1998,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend,
+         for (size_t j_src = 2*offset_j_max; j_src < n_backends; j_src++) {
+             const size_t j_dst = j_src - 2*offset_j_max;
+             push_data(j_src, j_dst, i_buf);
+-            const ggml_status status = ggml_backend_graph_compute_async(backend_ctx->backend_configs[j_dst].backend, step_cgraphs[j_dst]);
++            const ggml_status status = ggml_backend_graph_compute_async(backend_ctx->backend_configs[j_dst].backend, step_cgraphs[j_dst], -1);
+             if (status != GGML_STATUS_SUCCESS) {
+                 return status;
+             }
+@@ -2022,7 +2022,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend,
+                     continue;
+                 }
+                 auto & bcj = backend_ctx->backend_configs[j];
+-                const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, step_cgraphs[j]);
++                const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, step_cgraphs[j], -1);
+                 if (status != GGML_STATUS_SUCCESS) {
+                     return status;
+                 }
+@@ -2048,7 +2048,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend,
+     for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
+         for (size_t j = 0; j < n_backends; j++) {
+             auto & bcj = backend_ctx->backend_configs[j];
+-            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
++            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main, -1);
+             if (status != GGML_STATUS_SUCCESS) {
+                 return status;
+             }
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index 46f9aaeeb..2465e78e6 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -40,11 +40,26 @@ const char * ggml_backend_buft_name(ggml_backend_buffer_type_t buft) {
+ }
+ 
+ ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+-    GGML_ASSERT(buft);
+     if (size == 0) {
+         // return a dummy buffer for zero-sized allocations
+         return ggml_backend_buffer_init(buft, {}, NULL, 0);
+     }
++
++    if (buft->no_alloc) {
++        ggml_backend_buffer_t buf;
++
++        if (buft->iface.noalloc_buffer != NULL) {
++            buf = buft->iface.noalloc_buffer(buft, size);
++        } else {
++            buf = ggml_backend_buffer_init(buft, {}, NULL, size);
++        }
++
++        buf->no_alloc = true;
++        return buf;
++    }
++
++    GGML_ASSERT(buft);
++
+     return buft->iface.alloc_buffer(buft, size);
+ }
+ 
+@@ -98,7 +113,8 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
+         /* .buft      = */ buft,
+         /* .context   = */ context,
+         /* .size      = */ size,
+-        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
++        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY,
++        /* .no_alloc  = */ false
+     };
+ 
+     return buffer;
+@@ -131,6 +147,12 @@ void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
+         return NULL;
+     }
+ 
++    // If we aren't allocating memory, return a placeholder non-NULL pointer
++    // that meets alignment requirements
++    if (buffer->no_alloc) {
++        return (void *)ggml_backend_buffer_get_alignment(buffer);
++    }
++
+     // FIXME JG: a multi_buffer has a non-zero size, according to the above comment get_base is not optional,
+     //     I don't know whether the above comment is correct
+     if (!buffer->iface.get_base) {
+@@ -446,14 +468,14 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
+ }
+ 
+ enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+-    enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
++    enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph, -1);
+     ggml_backend_synchronize(backend);
+     return err;
+ }
+ 
+-enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
++enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph, int batch_size) {
+     GGML_ASSERT(backend);
+-    return backend->iface.graph_compute(backend, cgraph);
++    return backend->iface.graph_compute(backend, cgraph, batch_size);
+ }
+ 
+ bool ggml_backend_supports_op(ggml_backend_t backend, const struct ggml_tensor * op) {
+@@ -605,6 +627,13 @@ ggml_backend_t ggml_backend_dev_init(ggml_backend_dev_t device, const char * par
+     return device->iface.init_backend(device, params);
+ }
+ 
++void ggml_backend_dev_reset(ggml_backend_dev_t device) {
++    if (device->iface.reset == NULL) {
++        return;
++    }
++    device->iface.reset(device);
++}
++
+ ggml_backend_buffer_type_t ggml_backend_dev_buffer_type(ggml_backend_dev_t device) {
+     GGML_ASSERT(device);
+     return device->iface.get_buffer_type(device);
+@@ -822,6 +851,8 @@ struct ggml_backend_sched {
+ 
+     bool op_offload;
+ 
++    int batch_size; // a hint on the batch size to optimize processing, -1 to use heuristics
++
+     int debug;
+ 
+     // used for debugging graph reallocations [GGML_SCHED_DEBUG_REALLOC]
+@@ -829,6 +860,12 @@ struct ggml_backend_sched {
+     int debug_realloc;
+     int debug_graph_size;
+     int debug_prev_graph_size;
++
++    // allocate buffers on attached ggml_backend_buffer_type_t's and during reservation
++    // if false, dummy buffers are used for faster memory sizing calculations
++    // the scheduler needs to be recreated with allocated buffers before it can be used
++    // for computation
++    bool alloc_buffers;
+ };
+ 
+ #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
+@@ -920,7 +957,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
+         if (tensor->op != GGML_OP_ROPE && src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+             int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
+             // check if a backend with higher prio wants to offload the op
+-            if (sched->op_offload && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
++            if (sched->op_offload && (sched->batch_size < 0 || sched->batch_size >= 32) && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
+                 for (int b = 0; b < src_backend_id; b++) {
+                     if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
+                         SET_CAUSE(tensor, "1.off");
+@@ -1686,7 +1723,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+         }
+ 
+         if (!sched->callback_eval) {
+-            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
++            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph, sched->batch_size);
+             if (ec != GGML_STATUS_SUCCESS) {
+                 return ec;
+             }
+@@ -1708,7 +1745,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+ 
+                 struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
+ 
+-                enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
++                enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv, sched->batch_size);
+                 if (ec != GGML_STATUS_SUCCESS) {
+                     return ec;
+                 }
+@@ -1742,6 +1779,17 @@ ggml_backend_sched_t ggml_backend_sched_new(
+         size_t graph_size,
+         bool parallel,
+         bool op_offload) {
++            return ggml_backend_sched_new_ext(backends, bufts, n_backends, graph_size, parallel, op_offload, true);
++        }
++
++ggml_backend_sched_t ggml_backend_sched_new_ext(
++        ggml_backend_t * backends,
++        ggml_backend_buffer_type_t * bufts,
++        int n_backends,
++        size_t graph_size,
++        bool parallel,
++        bool op_offload,
++        bool alloc_buffers) {
+     GGML_ASSERT(n_backends > 0);
+     GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
+     GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
+@@ -1794,10 +1842,15 @@ ggml_backend_sched_t ggml_backend_sched_new(
+                 sched->events[b][c] = ggml_backend_event_new(backends[b]->device);
+             }
+         }
++
++        sched->bufts[b]->no_alloc = !alloc_buffers;
+     }
+ 
+     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
+     sched->op_offload = op_offload;
++    sched->batch_size = -1;
++
++    sched->alloc_buffers = alloc_buffers;
+ 
+     ggml_backend_sched_reset(sched);
+ 
+@@ -1812,6 +1865,10 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+         for (int c = 0; c < sched->n_copies; c++) {
+             ggml_backend_event_free(sched->events[b][c]);
+         }
++
++        if (sched->backends[b]->iface.reset != NULL) {
++            sched->backends[b]->iface.reset(sched->backends[b]);
++        }
+     }
+     ggml_gallocr_free(sched->galloc);
+     ggml_free(sched->ctx);
+@@ -1829,6 +1886,10 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+     free(sched);
+ }
+ 
++void ggml_backend_sched_set_batch_size(ggml_backend_sched_t sched, int batch_size) {
++    sched->batch_size = batch_size;
++}
++
+ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
+     GGML_ASSERT(sched);
+     // reset state for the next run
+@@ -1867,6 +1928,24 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
+         return false;
+     }
+ 
++    if (!ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
++        return false;
++    }
++
++    struct ggml_backend_sched_split * splits = sched->splits;
++    for (int i = 0; i < sched->n_splits; i++) {
++        struct ggml_backend_sched_split * split = &splits[i];
++        int split_backend_id = split->backend_id;
++        ggml_backend_t split_backend = sched->backends[split_backend_id];
++
++        if (split_backend->iface.graph_reserve != NULL) {
++            enum ggml_status ec = split_backend->iface.graph_reserve(split_backend, &split->graph, sched->alloc_buffers);
++            if (ec != GGML_STATUS_SUCCESS) {
++                return false;
++            }
++        }
++    }
++
+     ggml_backend_sched_reset(sched);
+ 
+     return true;
+@@ -1968,6 +2047,19 @@ size_t ggml_backend_sched_get_buffer_size(ggml_backend_sched_t sched, ggml_backe
+     return ggml_gallocr_get_buffer_size(sched->galloc, backend_index);
+ }
+ 
++size_t ggml_backend_sched_get_attempted_buffer_size(ggml_backend_sched_t sched, ggml_backend_t backend) {
++    int backend_index = ggml_backend_sched_backend_id(sched, backend);
++    GGML_ASSERT(backend_index >= 0 && backend_index < sched->n_backends);
++
++    size_t size = ggml_gallocr_get_attempted_buffer_size(sched->galloc, backend_index);
++
++    if (backend->iface.buffer_size != NULL) {
++        size += backend->iface.buffer_size(backend);
++    }
++
++    return size;
++}
++
+ void ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_t backend) {
+     GGML_ASSERT(sched);
+     int backend_index = ggml_backend_sched_backend_id(sched, backend);
+@@ -2388,3 +2480,15 @@ void ggml_backend_cleanup()
+     #endif /* GGML_TSAVORITE */
+     return;
+ }
++
++extern "C" void ggml_backend_log_profile_info(ggml_backend_t backend)
++{
++    if (backend == NULL) {
++        return;
++    }
++    if (backend->iface.profile == NULL) {
++       return;
++    }
++    backend->iface.profile();
++    return;
++}
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 49f840be2..93fe268ad 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -167,7 +167,7 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
+     GGML_UNUSED(backend);
+ }
+ 
+-static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
++static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph, int batch_size) {
+     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
+ 
+     struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, cpu_ctx->threadpool);
+diff --git a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
+index 33ccd2e8c..b21ad22ee 100644
+--- a/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
++++ b/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp
+@@ -3560,7 +3560,7 @@ ggml_backend_tsavorite_get_default_buffer_type(ggml_backend_t backend) {
+ }
+ 
+ static enum ggml_status ggml_backend_tsavorite_graph_compute(ggml_backend_t backend,
+-                                                             struct ggml_cgraph *cgraph) {
++                                                             struct ggml_cgraph *cgraph, int batch_size) {
+   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
+   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
+   return ggml_tsavorite_graph_compute(backend, cgraph);
+diff --git a/include/llama.h b/include/llama.h
+index eb8698140..8593cdf95 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -444,6 +444,9 @@ extern "C" {
+     // Call once at the end of the program - currently only used for MPI
+     LLAMA_API void llama_backend_free(void);
+ 
++    // Call once at the end of the program to log profile - currently only used for MPI
++    LLAMA_API void llama_backend_log_profile(void);
++
+     //optional:
+     LLAMA_API void llama_numa_init(enum ggml_numa_strategy numa);
+ 
+@@ -665,6 +668,13 @@ extern "C" {
+ 
+     // The following functions operate on a llama_context, hence the naming: llama_verb_...
+ 
++    // Add a loaded LoRA adapter to given context
++    // This will not modify model's weight
++    LLAMA_API int32_t llama_set_adapter_lora(
++            struct llama_context * ctx,
++            struct llama_adapter_lora * adapter,
++            float scale);
++
+     // Set LoRa adapters on the context. Will only modify if the adapters currently in context are different.
+     LLAMA_API int32_t llama_set_adapters_lora(
+             struct llama_context * ctx,
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 8126249e1..d646f91d8 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -3185,7 +3185,7 @@ struct ggml_cgraph * llama_graph_reserve(
+ }
+ 
+ // llama adapter API
+-
++extern "C"
+ int32_t llama_set_adapters_lora(
+             llama_context * ctx,
+             llama_adapter_lora ** adapters,
+diff --git a/src/llama-grammar.cpp b/src/llama-grammar.cpp
+index badcbfd0f..2ec4a7884 100644
+--- a/src/llama-grammar.cpp
++++ b/src/llama-grammar.cpp
+@@ -1125,6 +1125,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
+ 
+ struct llama_grammar * llama_grammar_init_impl(
+         const struct llama_vocab * vocab,
++        const struct ollama_vocab * ollama_vocab,
+         const llama_grammar_element ** rules,
+         size_t n_rules,
+         size_t start_rule_index) {
+@@ -1180,6 +1181,7 @@ struct llama_grammar * llama_grammar_init_impl(
+     // then the pointers would be invalidated when the local vec_rules goes out of scope.
+     return new llama_grammar {
+         vocab,
++        ollama_vocab,
+         std::move(vec_rules),
+         std::move(stacks),
+         /* .partial_utf8 = */             {},
+@@ -1194,6 +1196,7 @@ struct llama_grammar * llama_grammar_init_impl(
+ 
+ struct llama_grammar * llama_grammar_init_impl(
+         const struct llama_vocab * vocab,
++        const struct ollama_vocab * ollama_vocab,
+                       const char * grammar_str,
+                       const char * grammar_root,
+                               bool lazy,
+@@ -1286,6 +1289,7 @@ struct llama_grammar * llama_grammar_init_impl(
+     // then the pointers would be invalidated when the local vec_rules goes out of scope.
+     return new llama_grammar {
+         vocab,
++        ollama_vocab,
+         std::move(vec_rules),
+         std::move(stacks),
+         /* .partial_utf8 = */             {},
+@@ -1309,6 +1313,7 @@ void llama_grammar_free_impl(struct llama_grammar * grammar) {
+ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar) {
+     auto * result = new llama_grammar {
+         grammar.vocab,
++        grammar.o_vocab,
+         grammar.rules,
+         grammar.stacks,
+         grammar.partial_utf8,
+@@ -1337,7 +1342,6 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
+ }
+ 
+ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_data_array * cur_p) {
+-    GGML_ASSERT(grammar.vocab != nullptr);
+ 
+     if (grammar.awaiting_trigger) {
+         return;
+@@ -1359,9 +1363,13 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
+ 
+     for (size_t i = 0; i < cur_p->size; ++i) {
+         const llama_token id      = cur_p->data[i].id;
+-        const std::string & piece = grammar.vocab->token_to_piece(id);
++        const std::string piece = grammar.o_vocab ?
++            grammar.o_vocab->token_to_piece(id) :
++            grammar.vocab->token_to_piece(id);
+ 
+-        if (grammar.vocab->is_eog(id)) {
++        const bool is_eog = grammar.o_vocab ? grammar.o_vocab->is_eog(id) : grammar.vocab->is_eog(id);
++
++        if (is_eog) {
+             if (!allow_eog) {
+                 cur_p->data[i].logit = -INFINITY;
+             }
+@@ -1380,9 +1388,11 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
+ }
+ 
+ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token) {
+-    GGML_ASSERT(grammar.vocab != nullptr);
+ 
+-    const auto & piece = grammar.vocab->token_to_piece(token);
++    const std::string piece = grammar.o_vocab ?
++        grammar.o_vocab->token_to_piece(token) :
++        grammar.vocab->token_to_piece(token);
++
+ 
+     if (grammar.awaiting_trigger) {
+         if (std::find(grammar.trigger_tokens.begin(), grammar.trigger_tokens.end(), token) != grammar.trigger_tokens.end()) {
+@@ -1426,13 +1436,14 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
+         }
+     }
+ 
+-    if (grammar.vocab->is_eog(token)) {
++    const bool is_eog = grammar.o_vocab ? grammar.o_vocab->is_eog(token) : grammar.vocab->is_eog(token);
++    if (is_eog) {
+         for (const auto & stack : grammar.stacks) {
+             if (stack.empty()) {
+                 return;
+             }
+         }
+-        GGML_ABORT("fatal error");
++        GGML_ABORT("grammar error: end of grammar token received but grammar stack is not empty");
+     }
+ 
+     llama_grammar_accept_token(grammar, token, piece);
+@@ -1508,3 +1519,27 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
+     }
+ }
+ 
++const std::string & ollama_vocab::token_to_piece(const uint32_t token) const {
++    try {
++        return token_to_piece_map.at(token);
++    } catch (const std::out_of_range&) {
++        throw std::runtime_error("Token not found in vocabulary: " + std::to_string(token));
++    }
++}
++
++void ollama_vocab::add_token_pieces(const uint32_t* tokens, size_t n_tokens, const char** pieces) {
++    for (size_t i = 0; i < n_tokens; i++) {
++        token_to_piece_map[tokens[i]] = pieces[i];
++    }
++}
++
++bool ollama_vocab::is_eog(const uint32_t token) const {
++    return special_eog_ids.count(token) > 0;
++}
++
++void ollama_vocab::set_eog_tokens(const uint32_t* tokens, size_t n_tokens) {
++    for (size_t i = 0; i < n_tokens; i++) {
++        special_eog_ids.insert(tokens[i]);
++    }
++}
++
+diff --git a/src/llama-grammar.h b/src/llama-grammar.h
+index b5a0e588e..74e30a196 100644
+--- a/src/llama-grammar.h
++++ b/src/llama-grammar.h
+@@ -6,8 +6,19 @@
+ #include <regex>
+ #include <string>
+ #include <vector>
++#include <set>
+ 
+ struct llama_vocab;
++struct ollama_vocab {
++    std::map<uint32_t, std::string> token_to_piece_map;
++    std::set<uint32_t> special_eog_ids;
++
++    const std::string & token_to_piece(const uint32_t token) const;
++    void add_token_pieces(const uint32_t* tokens, size_t n_tokens, const char** pieces);
++    void set_eog_tokens(const uint32_t* tokens, size_t n_tokens);
++    bool is_eog(const uint32_t token) const;
++
++};
+ 
+ // grammar element type
+ enum llama_gretype {
+@@ -129,6 +140,7 @@ struct llama_grammar {
+ 
+     // note: allow null vocab for testing (not great)
+     const llama_vocab * vocab;
++    const ollama_vocab * o_vocab;
+ 
+     const llama_grammar_rules  rules;  // TODO: shared ptr
+           llama_grammar_stacks stacks;
+@@ -157,12 +169,14 @@ struct llama_grammar {
+ // note: needed for tests (not great)
+ struct llama_grammar * llama_grammar_init_impl(
+         const struct llama_vocab * vocab,
+-        const llama_grammar_element ** rules,
++        const struct ollama_vocab * ollama_vocab,
++	const llama_grammar_element ** rules,
+         size_t n_rules,
+         size_t start_rule_index);
+ 
+ struct llama_grammar * llama_grammar_init_impl(
+         const struct llama_vocab * vocab,
++        const struct ollama_vocab * ollama_vocab,
+                       const char * grammar_str,
+                       const char * grammar_root,
+                               bool lazy,
+diff --git a/src/llama-sampler.cpp b/src/llama-sampler.cpp
+index 9bbc5dbde..5cf66b63f 100644
+--- a/src/llama-sampler.cpp
++++ b/src/llama-sampler.cpp
+@@ -2477,7 +2477,7 @@ static void llama_sampler_grammar_reset(struct llama_sampler * smpl) {
+         trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
+     }
+ 
+-    auto * grammar_new = llama_grammar_init_impl(ctx->grammar->vocab, ctx->grammar_str.c_str(), ctx->grammar_root.c_str(),
++    auto * grammar_new = llama_grammar_init_impl(ctx->grammar->vocab, nullptr, ctx->grammar_str.c_str(), ctx->grammar_root.c_str(),
+                                                  ctx->grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
+                                                  ctx->grammar->trigger_tokens.data(), ctx->grammar->trigger_tokens.size());
+ 
+@@ -2559,9 +2559,9 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
+             trigger_pattern += ")[\\s\\S]*";
+ 
+             std::array<const char *, 1> tmp_trigger_patterns = { trigger_pattern.c_str() };
+-            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, tmp_trigger_patterns.data(), tmp_trigger_patterns.size(), trigger_tokens, num_trigger_tokens);
++            grammar = llama_grammar_init_impl(vocab, nullptr, grammar_str, grammar_root, lazy, tmp_trigger_patterns.data(), tmp_trigger_patterns.size(), trigger_tokens, num_trigger_tokens);
+         } else {
+-            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens);
++            grammar = llama_grammar_init_impl(vocab, nullptr, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens);
+         }
+         *ctx = {
+             /* .vocab        = */ vocab,
+diff --git a/src/llama.cpp b/src/llama.cpp
+index e9c302858..b67591662 100644
+--- a/src/llama.cpp
++++ b/src/llama.cpp
+@@ -103,6 +103,10 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
+     }
+ }
+ 
++extern "C"
++void llama_backend_log_profile(void) {
++    ggml_backend_log_profile_info(ggml_backend_init_by_name("TSAVORITE", NULL));
++}
+ void llama_backend_free(void) {
+     ggml_quantize_free();
+ }
+@@ -359,10 +363,12 @@ static struct llama_model * llama_model_load_from_file_impl(
+     for (const auto & dev : model->devices) {
+         ggml_backend_dev_props props;
+         ggml_backend_dev_get_props(dev.dev, &props);
++        size_t memory_free, memory_total;
++        ggml_backend_dev_memory(dev.dev, &memory_free, &memory_total);
+         LLAMA_LOG_INFO("%s: using device %s (%s) (%s) - %zu MiB free\n", __func__,
+                 ggml_backend_dev_name(dev.dev), ggml_backend_dev_description(dev.dev),
+                 props.device_id ? props.device_id : "unknown id",
+-                props.memory_free/1024/1024);
++                memory_free/1024/1024);
+     }
+ 
+     const int status = llama_model_load(metadata, set_tensor_data, set_tensor_data_ud, path_model, splits, file, *model, params);
+diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
+index 599077867..f06f09219 100644
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -106,6 +106,17 @@ enum mtmd_slice_tmpl {
+     MTMD_SLICE_TMPL_STEP3VL,
+ };
+ 
++mtmd_input_text* mtmd_input_text_init(const char * text, bool add_special, bool parse_special) {
++    return new mtmd_input_text{text, add_special, parse_special};
++}
++
++void mtmd_input_text_free(mtmd_input_text* input_text) {
++    if (input_text) {
++        delete input_text;
++    }
++}
++
++
+ const char * mtmd_default_marker() {
+     return "<__media__>";
+ }
+diff --git a/tools/mtmd/mtmd.h b/tools/mtmd/mtmd.h
+index e364174b8..5cc112b0f 100644
+--- a/tools/mtmd/mtmd.h
++++ b/tools/mtmd/mtmd.h
+@@ -80,6 +80,9 @@ typedef struct mtmd_input_chunk  mtmd_input_chunk;
+ typedef struct mtmd_input_chunks mtmd_input_chunks;
+ typedef struct mtmd_input_text   mtmd_input_text;
+ 
++MTMD_API mtmd_input_text* mtmd_input_text_init(const char * text, bool add_special, bool parse_special);
++MTMD_API void mtmd_input_text_free(mtmd_input_text* input_text);
++
+ struct mtmd_context_params {
+     bool use_gpu;
+     bool print_timings;

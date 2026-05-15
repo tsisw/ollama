@@ -180,8 +180,8 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 	requiredMemory.CPU.Name = C.GoString(C.ggml_backend_dev_name(cpuDeviceBufferType.d))
 	var props C.struct_ggml_backend_dev_props
 	C.ggml_backend_dev_get_props(cpuDeviceBufferType.d, &props)
-	requiredMemory.CPU.ID = C.GoString(props.id)
-	requiredMemory.CPU.Library = C.GoString(props.library)
+	requiredMemory.CPU.ID = C.GoString(props.device_id)
+	//requiredMemory.CPU.Library = C.GoString(props.library)
 	requiredMemory.CPU.Weights = make([]uint64, blocks+1)
 	requiredMemory.CPU.Cache = make([]uint64, blocks+1)
 
@@ -199,8 +199,8 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 		requiredMemory.GPUs[i].Name = C.GoString(C.ggml_backend_dev_name(d))
 		var props C.struct_ggml_backend_dev_props
 		C.ggml_backend_dev_get_props(d, &props)
-		requiredMemory.GPUs[i].ID = C.GoString(props.id)
-		requiredMemory.GPUs[i].Library = C.GoString(props.library)
+		requiredMemory.GPUs[i].ID = C.GoString(props.device_id)
+		//requiredMemory.GPUs[i].Library = C.GoString(props.library)
 		requiredMemory.GPUs[i].Weights = make([]uint64, blocks+1)
 		requiredMemory.GPUs[i].Cache = make([]uint64, blocks+1)
 	}
@@ -723,16 +723,16 @@ func (b *Backend) BackendDevices() []ml.DeviceInfo {
 		C.ggml_backend_dev_get_props(dev, &props)
 		info.Name = C.GoString(props.name)
 		info.Description = C.GoString(props.description)
-		info.ID = C.GoString(props.id)
-		info.Library = C.GoString(props.library)
-		info.ComputeMajor = (int)(props.compute_major)
-		info.ComputeMinor = (int)(props.compute_minor)
-		info.DriverMajor = (int)(props.driver_major)
-		info.DriverMinor = (int)(props.driver_minor)
-		info.Integrated = props.integrated != 0
-		if props.library != nil {
-			info.Library = C.GoString(props.library)
-		}
+		info.ID = C.GoString(props.device_id)
+		//info.Library = C.GoString(props.library)
+		//info.ComputeMajor = (int)(props.compute_major)
+		//info.ComputeMinor = (int)(props.compute_minor)
+		//info.DriverMajor = (int)(props.driver_major)
+		//info.DriverMinor = (int)(props.driver_minor)
+		//info.Integrated = props.integrated != 0
+		//if props.library != nil {
+		//	info.Library = C.GoString(props.library)
+		//}
 		if props.device_id != nil {
 			info.PCIID = C.GoString(props.device_id)
 		}
