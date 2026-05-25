@@ -3828,41 +3828,4 @@ index 00000000..8ef19b8c
 +} // extern "C"
 +
 +#endif // #ifdef _WIN32
-diff --git a/ggml/src/ggml-tsavorite/CMakeLists.txt b/ggml/src/ggml-tsavorite/CMakeLists.txt
-index 65972050a..0e9f938bf 100644
---- a/ggml/src/ggml-tsavorite/CMakeLists.txt
-+++ b/ggml/src/ggml-tsavorite/CMakeLists.txt
-@@ -12,4 +12,32 @@ if(DEFINED MLIR_COMPILER_DIR)
-     target_link_directories(ggml-tsavorite PRIVATE "${MLIR_COMPILER_DIR}/lib")
- endif()
- 
-+if (NOT ${GGML_TSAVORITE_TARGET} STREQUAL fpga)
- target_link_libraries(ggml-tsavorite PRIVATE ${TLIBS} dl rt)
-+else()
-+
-+message(STATUS "OLLAMA = ${OLLAMA}")
-+
-+if(OLLAMA)
-+target_link_libraries(ggml-tsavorite
-+  PRIVATE
-+    -Wl,--no-as-needed
-+    ${CMAKE_BINARY_DIR}/lib/ollama/libggml-cpu.so
-+    ${TLIBS}
-+    dl
-+    rt
-+)
-+else()
-+target_link_libraries(ggml-tsavorite
-+  PRIVATE
-+    -Wl,--no-as-needed
-+    ggml-cpu
-+    ${TLIBS}
-+    dl
-+    rt
-+)
-+endif()
-+set_target_properties(ggml-tsavorite PROPERTIES
-+  BUILD_RPATH "${CMAKE_BINARY_DIR}/lib/ollama"
-+)
-+endif()
 
