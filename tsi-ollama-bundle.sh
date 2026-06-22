@@ -167,7 +167,15 @@ resolve_sdk_paths() {
 setup_native_toolchain() {
   export CC="/proj/local/gcc-13.3.0/bin/gcc"
   export CXX="/proj/local/gcc-13.3.0/bin/g++"
+
+  export CGO_ENABLED=1
+  export CGO_CC="${CC}"
+  export CGO_CXX="${CXX}"
+
+  export PATH="/proj/local/gcc-13.3.0/bin:${PATH}"
   export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:${LD_LIBRARY_PATH:-}"
+
+  export CGO_LDFLAGS="${CGO_LDFLAGS:-} -L/proj/local/gcc-13.3.0/lib64 -Wl,-rpath,/proj/local/gcc-13.3.0/lib64 -lstdc++fs"
 }
 
 sync_and_patch_llama_vendor() {
