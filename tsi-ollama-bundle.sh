@@ -266,8 +266,9 @@ build_ollama_posix() {
 
   rm -rf build-posix
 
+  local triton_defs="-DTRITON_ADD=1 -DTRITON_MAT_MUL=1 -DTRITON_DEBUG=0"
   local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF -DOLLAMA=ON"
-  local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON -mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
+  local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON ${triton_defs}-mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
 
   run cmake -B build-posix ${common} \
     -DCMAKE_C_COMPILER="${CC}" \
@@ -292,6 +293,8 @@ build_ollama_fpga() {
   local ARM_TOOLCHAIN_FILE="${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake"
   [ -f "${ARM_TOOLCHAIN_FILE}" ] || die "ARM toolchain file not found: ${ARM_TOOLCHAIN_FILE}"
 
+  local triton_defs="-DTRITON_ADD=1 -DTRITON_MAT_MUL=1 -DTRITON_DEBUG=0"
+
   run cmake -B build-fpga \
     -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" \
     -DTOOLBOX_DIR="${TOOLBOX_DIR}" \
@@ -299,8 +302,8 @@ build_ollama_fpga() {
     -DGGML_TSAVORITE_TARGET=fpga \
     -DLLAMA_CURL=OFF \
     -DOLLAMA=ON \
-    -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" \
-    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" || return 1
+    -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} ${triton_defs} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" \
+    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${triton_defs} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" || return 1
 
   run cmake --build build-fpga --config Release || return 1
 
@@ -360,9 +363,18 @@ if [ -f "blobs/txe_triton_add/txe_blob_0.blob" ]; then
   cp "blobs/txe_triton_add/txe_blob_0.blob" "\${dst}/txe_blob_0.blob"
 fi
 
+# Triton MAT_MUL
+dst="\${TSI_BLOB_INSTALL_DIR}/txe_triton_mat_mul/blobs"
+rm -rf "\${dst}"
+mkdir -p "\${dst}"
+if [ -f "blobs/txe_triton_mat_mul/txe_blob_0.blob" ]; then
+  cp "blobs/txe_triton_mat_mul/txe_blob_0.blob" "\${dst}/txe_blob_0.blob"
+fi
+
 mkdir -p "\${ML_BACKEND_GGML_DIR}"
 rm -f "\${ML_BACKEND_GGML_DIR}/ggml-tsi-kernel"
 ln -s "\${GGML_TSI_KERNEL_DIR}" "\${ML_BACKEND_GGML_DIR}/ggml-tsi-kernel"
+
 EOF
 
   chmod +x "${tsi_ggml_dir}/ggml.sh"
