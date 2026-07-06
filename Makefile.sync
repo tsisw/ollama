@@ -1,6 +1,6 @@
 UPSTREAM=https://github.com/tsisw/llama.cpp.git
 WORKDIR=llama/vendor
-FETCH_HEAD=8f9137454933dff69e9e0b2ea853345048b8bab0
+FETCH_HEAD=a627e44d8f5b841a3be6b246eeb9aa5d630a3a89
 .PHONY: help
 help:
 	@echo "Available targets:"
