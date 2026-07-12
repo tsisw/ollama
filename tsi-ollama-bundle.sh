@@ -334,48 +334,148 @@ create_ollama_tsi_ggml_runtime_dir() {
     cp -r "${ggml_tsi_kernel_dir}/fpga/blobs" "${tsi_ggml_dir}/"
   fi
 
-  cat > "${tsi_ggml_dir}/ggml.sh" <<EOF
+  cat > "${tsi_ggml_dir}/tsavorite-model-deployment.yaml" <<'EOF'
+# Tsavorite deployment config
+txe_count:1
+multi_thread_enable: true
+EOF
+
+  cat > "${tsi_ggml_dir}/ggml.sh" <<'EOF'
 #!/bin/bash
-export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:$(pwd)
 
-TSI_BLOB_INSTALL_DIR="${blob_install_dir}"
-ML_BACKEND_GGML_DIR="${ml_backend_ggml_dir}"
-GGML_TSI_KERNEL_DIR="${ggml_tsi_kernel_dir}"
+TAOS_CONFIG_PATH="/etc/taos/taos.json"
 
-tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm" "swiglu" \\
-"add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16" "swiglu_16" \\
-"mul_mat_tile_f32_k32" "mul_mat_tile_f32_k64" "mul_mat_tile_f32_k128")
+update_one_tsavorite_deployment_yaml() {
+  local deployment_yaml_path="$1"
+  local txe_count="$2"
 
-for kernel in "\${tsi_kernels[@]}"; do
-  dst="\${TSI_BLOB_INSTALL_DIR}/txe_\${kernel}/blobs"
-  rm -rf "\${dst}"
-  mkdir -p "\${dst}"
-  if [ -f "blobs/txe_\${kernel}.blob" ]; then
-    cp "blobs/txe_\${kernel}.blob" "\${dst}/txe_\${kernel}.blob"
+  mkdir -p "$(dirname "${deployment_yaml_path}")" || return 1
+
+  cat > "${deployment_yaml_path}" <<YAML_EOF
+# Tsavorite deployment config
+txe_count:${txe_count}
+multi_thread_enable: true
+YAML_EOF
+
+  echo "INFO: updated ${deployment_yaml_path} with txe_count:${txe_count}, multi_thread_enable:true"
+  return 0
+}
+
+read_txe_count_from_taos_json() {
+  if [ ! -f "${TAOS_CONFIG_PATH}" ]; then
+    echo "WARNING: ${TAOS_CONFIG_PATH} not found; using default txe_count=1" >&2
+    echo "1"
+    return 0
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "WARNING: python3 not found; cannot parse ${TAOS_CONFIG_PATH}; using default txe_count=1" >&2
+    echo "1"
+    return 0
+  fi
+
+  local txe_count
+  txe_count="$(python3 - <<'PY'
+import json
+import sys
+
+path = "/etc/taos/taos.json"
+
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError("top-level JSON must be an object")
+
+    txe_count = data.get("txe_count", 1)
+
+    if isinstance(txe_count, bool) or not isinstance(txe_count, int) or txe_count < 1:
+        raise ValueError("txe_count must be an integer >= 1")
+
+    print(txe_count)
+
+except Exception as e:
+    print(f"WARNING: failed to parse {path}: {e}; using default txe_count=1", file=sys.stderr)
+    print(1)
+PY
+)"
+
+  if [ -z "${txe_count}" ]; then
+    echo "WARNING: empty txe_count parsed from ${TAOS_CONFIG_PATH}; using default txe_count=1" >&2
+    echo "1"
+    return 0
+  fi
+
+  echo "${txe_count}"
+  return 0
+}
+
+update_tsavorite_deployment_yaml_from_taos() {
+  local txe_count=""
+  local script_dir=""
+
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  txe_count="$(read_txe_count_from_taos_json)"
+
+  update_one_tsavorite_deployment_yaml "${script_dir}/tsavorite-model-deployment.yaml" "${txe_count}" || return 1
+
+  if [ -d "${script_dir}/../bin" ] || [ -f "${script_dir}/../bin/tsavorite-model-deployment.yaml" ]; then
+    update_one_tsavorite_deployment_yaml "${script_dir}/../bin/tsavorite-model-deployment.yaml" "${txe_count}" || return 1
+  fi
+
+  return 0
+}
+
+update_tsavorite_deployment_yaml_from_taos || exit 1
+
+TSI_BLOB_INSTALL_DIR="__TSI_BLOB_INSTALL_DIR__"
+ML_BACKEND_GGML_DIR="__ML_BACKEND_GGML_DIR__"
+GGML_TSI_KERNEL_DIR="__GGML_TSI_KERNEL_DIR__"
+
+tsi_kernels=(
+  "add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sqr" "sigmoid" "silu" "rms_norm" "swiglu"
+  "add_16" "sub_16" "mult_16" "div_16" "abs_16" "inv_16" "neg_16" "sin_16" "sqrt_16" "sqr_16" "sigmoid_16" "silu_16" "rms_norm_16" "swiglu_16"
+  "mul_mat_tile_f32_k32" "mul_mat_tile_f32_k64" "mul_mat_tile_f32_k128"
+)
+
+for kernel in "${tsi_kernels[@]}"; do
+  dst="${TSI_BLOB_INSTALL_DIR}/txe_${kernel}/blobs"
+  rm -rf "${dst}"
+  mkdir -p "${dst}"
+
+  if [ -f "blobs/txe_${kernel}.blob" ]; then
+    cp "blobs/txe_${kernel}.blob" "${dst}/txe_${kernel}.blob"
   fi
 done
 
 # Triton ADD
-dst="\${TSI_BLOB_INSTALL_DIR}/txe_triton_add/blobs"
-rm -rf "\${dst}"
-mkdir -p "\${dst}"
+dst="${TSI_BLOB_INSTALL_DIR}/txe_triton_add/blobs"
+rm -rf "${dst}"
+mkdir -p "${dst}"
+
 if [ -f "blobs/txe_triton_add/txe_blob_0.blob" ]; then
-  cp "blobs/txe_triton_add/txe_blob_0.blob" "\${dst}/txe_blob_0.blob"
+  cp "blobs/txe_triton_add/txe_blob_0.blob" "${dst}/txe_blob_0.blob"
 fi
 
 # Triton MAT_MUL
-dst="\${TSI_BLOB_INSTALL_DIR}/txe_triton_mat_mul/blobs"
-rm -rf "\${dst}"
-mkdir -p "\${dst}"
+dst="${TSI_BLOB_INSTALL_DIR}/txe_triton_mat_mul/blobs"
+rm -rf "${dst}"
+mkdir -p "${dst}"
+
 if [ -f "blobs/txe_triton_mat_mul/txe_blob_0.blob" ]; then
-  cp "blobs/txe_triton_mat_mul/txe_blob_0.blob" "\${dst}/txe_blob_0.blob"
+  cp "blobs/txe_triton_mat_mul/txe_blob_0.blob" "${dst}/txe_blob_0.blob"
 fi
 
-mkdir -p "\${ML_BACKEND_GGML_DIR}"
-rm -f "\${ML_BACKEND_GGML_DIR}/ggml-tsi-kernel"
-ln -s "\${GGML_TSI_KERNEL_DIR}" "\${ML_BACKEND_GGML_DIR}/ggml-tsi-kernel"
-
+mkdir -p "${ML_BACKEND_GGML_DIR}"
+rm -f "${ML_BACKEND_GGML_DIR}/ggml-tsi-kernel"
+ln -s "${GGML_TSI_KERNEL_DIR}" "${ML_BACKEND_GGML_DIR}/ggml-tsi-kernel"
 EOF
+
+  sed -i "s|__TSI_BLOB_INSTALL_DIR__|${blob_install_dir}|g" "${tsi_ggml_dir}/ggml.sh"
+  sed -i "s|__ML_BACKEND_GGML_DIR__|${ml_backend_ggml_dir}|g" "${tsi_ggml_dir}/ggml.sh"
+  sed -i "s|__GGML_TSI_KERNEL_DIR__|${ggml_tsi_kernel_dir}|g" "${tsi_ggml_dir}/ggml.sh"
 
   chmod +x "${tsi_ggml_dir}/ggml.sh"
 }
