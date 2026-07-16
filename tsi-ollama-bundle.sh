@@ -336,8 +336,12 @@ create_ollama_tsi_ggml_runtime_dir() {
 
   cat > "${tsi_ggml_dir}/tsavorite-model-deployment.yaml" <<'EOF'
 # Tsavorite deployment config
-txe_count:1
+txe_count: 1
 multi_thread_enable: true
+# Enable additional Triton MAT_MUL shapes beyond stable baseline.
+# false = old behavior
+# true  = new offload shapes
+advanced_matmul_shape_offload: false
 EOF
 
   cat > "${tsi_ggml_dir}/ggml.sh" <<'EOF'
@@ -349,16 +353,37 @@ TAOS_CONFIG_PATH="/etc/taos/taos.json"
 update_one_tsavorite_deployment_yaml() {
   local deployment_yaml_path="$1"
   local txe_count="$2"
+  local advanced_matmul_shape_offload="false"
 
   mkdir -p "$(dirname "${deployment_yaml_path}")" || return 1
 
+  if [ -f "${deployment_yaml_path}" ]; then
+    local existing_advanced
+    existing_advanced="$(awk -F: '
+      /^[[:space:]]*advanced_matmul_shape_offload[[:space:]]*:/ {
+        v=$2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        print v
+        exit
+      }
+    ' "${deployment_yaml_path}")"
+
+    if [ -n "${existing_advanced}" ]; then
+      advanced_matmul_shape_offload="${existing_advanced}"
+    fi
+  fi
+
   cat > "${deployment_yaml_path}" <<YAML_EOF
 # Tsavorite deployment config
-txe_count:${txe_count}
+txe_count: ${txe_count}
 multi_thread_enable: true
+# Enable additional Triton MAT_MUL shapes beyond stable baseline.
+# false = old behavior
+# true  = new offload shapes
+advanced_matmul_shape_offload: ${advanced_matmul_shape_offload}
 YAML_EOF
 
-  echo "INFO: updated ${deployment_yaml_path} with txe_count:${txe_count}, multi_thread_enable:true"
+  echo "INFO: updated ${deployment_yaml_path} with txe_count:${txe_count}, multi_thread_enable:true; preserved advanced_matmul_shape_offload:${advanced_matmul_shape_offload}"
   return 0
 }
 
@@ -444,29 +469,24 @@ for kernel in "${tsi_kernels[@]}"; do
   dst="${TSI_BLOB_INSTALL_DIR}/txe_${kernel}/blobs"
   rm -rf "${dst}"
   mkdir -p "${dst}"
-
   if [ -f "blobs/txe_${kernel}.blob" ]; then
     cp "blobs/txe_${kernel}.blob" "${dst}/txe_${kernel}.blob"
   fi
 done
 
-# Triton ADD
-dst="${TSI_BLOB_INSTALL_DIR}/txe_triton_add/blobs"
-rm -rf "${dst}"
-mkdir -p "${dst}"
+triton_kernels=(
+  "triton_add"
+  "triton_mat_mul"
+)
 
-if [ -f "blobs/txe_triton_add/txe_blob_0.blob" ]; then
-  cp "blobs/txe_triton_add/txe_blob_0.blob" "${dst}/txe_blob_0.blob"
-fi
-
-# Triton MAT_MUL
-dst="${TSI_BLOB_INSTALL_DIR}/txe_triton_mat_mul/blobs"
-rm -rf "${dst}"
-mkdir -p "${dst}"
-
-if [ -f "blobs/txe_triton_mat_mul/txe_blob_0.blob" ]; then
-  cp "blobs/txe_triton_mat_mul/txe_blob_0.blob" "${dst}/txe_blob_0.blob"
-fi
+for kernel in "${triton_kernels[@]}"; do
+  dst="${TSI_BLOB_INSTALL_DIR}/txe_${kernel}/blobs"
+  rm -rf "${dst}"
+  mkdir -p "${dst}"
+  if [ -f "blobs/txe_${kernel}/txe_blob_0.blob" ]; then
+    cp "blobs/txe_${kernel}/txe_blob_0.blob" "${dst}/txe_blob_0.blob"
+  fi
+done
 
 mkdir -p "${ML_BACKEND_GGML_DIR}"
 rm -f "${ML_BACKEND_GGML_DIR}/ggml-tsi-kernel"
