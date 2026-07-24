@@ -269,12 +269,16 @@ build_ollama_posix() {
   local triton_defs="-DTRITON_ADD=1 -DTRITON_MAT_MUL=1 -DTRITON_DEBUG=0"
   local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF -DOLLAMA=ON"
   local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON ${triton_defs}-mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
+  local posix_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-posix/lib"
+  [ -f "${posix_libomp_dir}/libomp.so" ] || die "POSIX libomp.so not found: ${posix_libomp_dir}/libomp.so"
 
   run cmake -B build-posix ${common} \
     -DCMAKE_C_COMPILER="${CC}" \
     -DCMAKE_CXX_COMPILER="${CXX}" \
     -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
-    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" || return 1
+    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
+    -DCMAKE_EXE_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L/proj/local/gcc-13.3.0/lib64 -Wl,-rpath-link,/proj/local/gcc-13.3.0/lib64 -Wl,-rpath,/proj/local/gcc-13.3.0/lib64 -lomp -lgcc_s" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L/proj/local/gcc-13.3.0/lib64 -Wl,-rpath-link,/proj/local/gcc-13.3.0/lib64 -Wl,-rpath,/proj/local/gcc-13.3.0/lib64 -lomp -lgcc_s" || return 1
 
   run cmake --build build-posix --config Release || return 1
 
@@ -294,6 +298,8 @@ build_ollama_fpga() {
   [ -f "${ARM_TOOLCHAIN_FILE}" ] || die "ARM toolchain file not found: ${ARM_TOOLCHAIN_FILE}"
 
   local triton_defs="-DTRITON_ADD=1 -DTRITON_MAT_MUL=1 -DTRITON_DEBUG=0"
+  local fpga_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-fpga/lib"
+  [ -f "${fpga_libomp_dir}/libomp.so" ] || die "FPGA/aarch64 libomp.so not found: ${fpga_libomp_dir}/libomp.so"
 
   run cmake -B build-fpga \
     -DCMAKE_TOOLCHAIN_FILE="${ARM_TOOLCHAIN_FILE}" \
@@ -303,7 +309,9 @@ build_ollama_fpga() {
     -DLLAMA_CURL=OFF \
     -DOLLAMA=ON \
     -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} ${triton_defs} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" \
-    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${triton_defs} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" || return 1
+    -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${triton_defs} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" \
+    -DCMAKE_EXE_LINKER_FLAGS="-L${fpga_libomp_dir} -Wl,-rpath,${fpga_libomp_dir} -Wl,-rpath-link,${fpga_libomp_dir} -lomp" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-L${fpga_libomp_dir} -Wl,-rpath,${fpga_libomp_dir} -Wl,-rpath-link,${fpga_libomp_dir} -lomp" || return 1
 
   run cmake --build build-fpga --config Release || return 1
 
@@ -318,6 +326,20 @@ copy_if_exists() {
   if [ -e "${src}" ]; then
     cp -r "${src}" "${dst}"
   fi
+}
+
+copy_libomp_files() {
+  local src_dir="$1"
+  local dst_dir="$2"
+
+  mkdir -p "${dst_dir}"
+
+  local f
+  for f in "${src_dir}"/libomp.so*; do
+    if [ -e "${f}" ]; then
+      cp -P "${f}" "${dst_dir}/"
+    fi
+  done
 }
 
 create_ollama_tsi_ggml_runtime_dir() {
@@ -515,6 +537,9 @@ package_ollama_posix() {
 
   cp build-posix/lib/ollama/libggml-*.so "${release_dir}/bin/" 2>/dev/null || true
   cp build-posix/lib/ollama/libggml-*.so "${release_dir}/lib/" 2>/dev/null || true
+  local posix_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-posix/lib"
+  copy_libomp_files "${posix_libomp_dir}" "${release_dir}/bin"
+  copy_libomp_files "${posix_libomp_dir}" "${release_dir}/lib"
 
   copy_if_exists "lib" "${release_dir}/"
   copy_if_exists "README.md" "${release_dir}/"
@@ -541,6 +566,9 @@ package_ollama_fpga() {
 
   cp build-fpga/lib/ollama/libggml-*.so "${release_dir}/bin/" 2>/dev/null || true
   cp build-fpga/lib/ollama/libggml-*.so "${release_dir}/lib/" 2>/dev/null || true
+  local fpga_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-fpga/lib"
+  copy_libomp_files "${fpga_libomp_dir}" "${release_dir}/bin"
+  copy_libomp_files "${fpga_libomp_dir}" "${release_dir}/lib"
 
   copy_if_exists "lib" "${release_dir}/"
   copy_if_exists "README.md" "${release_dir}/"
