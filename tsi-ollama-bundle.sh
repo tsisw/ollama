@@ -356,15 +356,12 @@ create_ollama_tsi_ggml_runtime_dir() {
     cp -r "${ggml_tsi_kernel_dir}/fpga/blobs" "${tsi_ggml_dir}/"
   fi
 
-  cat > "${tsi_ggml_dir}/tsavorite-model-deployment.yaml" <<'EOF'
-# Tsavorite deployment config
-txe_count: 1
-multi_thread_enable: true
-# Enable additional Triton MAT_MUL shapes beyond stable baseline.
-# false = old behavior
-# true  = new offload shapes
-advanced_matmul_shape_offload: false
-EOF
+  if [ ! -f "llama/vendor/tsavorite-model-deployment.yaml" ]; then
+    die "required llama/vendor/tsavorite-model-deployment.yaml not found for Ollama FPGA package"
+  fi
+
+  cp "llama/vendor/tsavorite-model-deployment.yaml" "${tsi_ggml_dir}/tsavorite-model-deployment.yaml" || return 1
+  log_info "included llama/vendor/tsavorite-model-deployment.yaml in Ollama tsi-ggml runtime"
 
   cat > "${tsi_ggml_dir}/ggml.sh" <<'EOF'
 #!/bin/bash
@@ -376,13 +373,36 @@ update_one_tsavorite_deployment_yaml() {
   local deployment_yaml_path="$1"
   local txe_count="$2"
   local advanced_matmul_shape_offload="false"
+  local triton_matmul_small_n_transpose_opt="false"
+  local user_dram_size_gb="8"
 
   mkdir -p "$(dirname "${deployment_yaml_path}")" || return 1
 
   if [ -f "${deployment_yaml_path}" ]; then
     local existing_advanced
+    local existing_small_n_opt
+    local existing_user_dram_size_gb
+
     existing_advanced="$(awk -F: '
       /^[[:space:]]*advanced_matmul_shape_offload[[:space:]]*:/ {
+        v=$2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        print v
+        exit
+      }
+    ' "${deployment_yaml_path}")"
+
+    existing_small_n_opt="$(awk -F: '
+      /^[[:space:]]*triton_matmul_small_n_transpose_opt[[:space:]]*:/ {
+        v=$2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        print v
+        exit
+      }
+    ' "${deployment_yaml_path}")"
+
+    existing_user_dram_size_gb="$(awk -F: '
+      /^[[:space:]]*user_dram_size_gb[[:space:]]*:/ {
         v=$2
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
         print v
@@ -393,19 +413,33 @@ update_one_tsavorite_deployment_yaml() {
     if [ -n "${existing_advanced}" ]; then
       advanced_matmul_shape_offload="${existing_advanced}"
     fi
+
+    if [ -n "${existing_small_n_opt}" ]; then
+      triton_matmul_small_n_transpose_opt="${existing_small_n_opt}"
+    fi
+
+    if [ -n "${existing_user_dram_size_gb}" ]; then
+      user_dram_size_gb="${existing_user_dram_size_gb}"
+    fi
   fi
 
   cat > "${deployment_yaml_path}" <<YAML_EOF
 # Tsavorite deployment config
 txe_count: ${txe_count}
 multi_thread_enable: true
+# Runtime user DRAM size in GiB.
+user_dram_size_gb: ${user_dram_size_gb}
 # Enable additional Triton MAT_MUL shapes beyond stable baseline.
 # false = old behavior
 # true  = new offload shapes
 advanced_matmul_shape_offload: ${advanced_matmul_shape_offload}
+# Enable Triton MAT_MUL small-N transpose optimization.
+# false = old behavior
+# true  = for M >> N, compute swapped [N x M] and transpose copyback to [M x N]
+triton_matmul_small_n_transpose_opt: ${triton_matmul_small_n_transpose_opt}
 YAML_EOF
 
-  echo "INFO: updated ${deployment_yaml_path} with txe_count:${txe_count}, multi_thread_enable:true; preserved advanced_matmul_shape_offload:${advanced_matmul_shape_offload}"
+  echo "INFO: updated ${deployment_yaml_path} with txe_count:${txe_count}, multi_thread_enable:true; preserved advanced_matmul_shape_offload:${advanced_matmul_shape_offload}, triton_matmul_small_n_transpose_opt:${triton_matmul_small_n_transpose_opt}, user_dram_size_gb:${user_dram_size_gb}"
   return 0
 }
 
