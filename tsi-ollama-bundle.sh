@@ -537,16 +537,12 @@ triton_kernels=(
 )
 
 for kernel in "${triton_kernels[@]}"; do
-  dst="${ML_BACKEND_GGML_DIR}/txe_${kernel}/blobs"
+  dst="${TSI_BLOB_INSTALL_DIR}/txe_${kernel}/blobs"
   rm -rf "${dst}"
   mkdir -p "${dst}"
 
-  src_blob="${TSI_BLOB_INSTALL_DIR}/txe_${kernel}/blobs/txe_blob_0.blob"
-
-  if [ -f "${src_blob}" ]; then
-    cp "${src_blob}" "${dst}/"
-  else
-    echo "WARNING: Triton blob not found for ${kernel}: ${src_blob}" >&2
+  if [ -f "blobs/txe_${kernel}/txe_blob_0.blob" ]; then
+    cp "blobs/txe_${kernel}/txe_blob_0.blob" "${dst}/txe_blob_0.blob"
   fi
 done
 
