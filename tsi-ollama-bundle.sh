@@ -543,6 +543,8 @@ for kernel in "${triton_kernels[@]}"; do
 
   if [ -f "blobs/txe_${kernel}/txe_blob_0.blob" ]; then
     cp "blobs/txe_${kernel}/txe_blob_0.blob" "${dst}/txe_blob_0.blob"
+  else
+    echo "WARNING: Triton blob not found for ${kernel}: blobs/txe_${kernel}/txe_blob_0.blob" >&2
   fi
 done
 
