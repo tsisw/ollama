@@ -10,6 +10,19 @@ status() { echo ">>> $*" >&2; }
 error() { echo "${red}ERROR:${plain} $*"; exit 1; }
 warning() { echo "${red}WARNING:${plain} $*"; }
 
+# Sets ENABLE_PROFILING=1 if the user passes --enable-profiling on the
+# command line (e.g. `./install-tsi-ollama.sh --enable-profiling`).
+# This value is later used in configure_systemd() to decide whether to
+# inject an ENABLE_PROFILING=1 environment variable into the systemd
+# service unit.
+ENABLE_PROFILING=0
+for arg in "$@"; do
+    case "$arg" in
+        --enable-profiling) ENABLE_PROFILING=1 ;;
+        *) ;;
+    esac
+done
+
 TEMP_DIR=$(mktemp -d)
 cleanup() { rm -rf $TEMP_DIR; }
 trap cleanup EXIT
@@ -151,6 +164,14 @@ configure_systemd() {
     $SUDO usermod -a -G ollama $(whoami)
 
     status "Creating ollama systemd service..."
+    # If --enable-profiling was passed (see ENABLE_PROFILING above), add
+    # an Environment="ENABLE_PROFILING=1" line to the generated unit file.
+    # Otherwise this stays empty and the heredoc just prints a blank line
+    # in its place (harmless - systemd ignores blank lines in unit files).
+    PROFILING_ENV_LINE=""
+    if [ "$ENABLE_PROFILING" -eq 1 ]; then
+        PROFILING_ENV_LINE='Environment="ENABLE_PROFILING=1"'
+    fi
     cat <<EOF | $SUDO tee /etc/systemd/system/ollama.service >/dev/null
 [Unit]
 Description=Ollama Service
@@ -167,6 +188,7 @@ RestartSec=3
 Environment="PATH=$PATH"
 Environment="LD_LIBRARY_PATH=/usr/bin/tsi/bin/aot-tests/lib/:/usr/local/ollama-arm64-release/lib/:/usr/local/ollama-arm64-release/bin/:${LD_LIBRARY_PATH:-}"
 Environment="OLLAMA_MODELS=/tsi/ollama-models/"
+${PROFILING_ENV_LINE}
 [Install]
 WantedBy=default.target
 EOF
