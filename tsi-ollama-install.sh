@@ -11,7 +11,7 @@ error() { echo "${red}ERROR:${plain} $*"; exit 1; }
 warning() { echo "${red}WARNING:${plain} $*"; }
 
 # Sets ENABLE_PROFILING=1 if the user passes --enable-profiling on the
-# command line (e.g. `./install-tsi-ollama.sh --enable-profiling`).
+# command line (e.g. `./tsi-ollama-install.sh --enable-profiling`).
 # This value is later used in configure_systemd() to decide whether to
 # inject an ENABLE_PROFILING=1 environment variable into the systemd
 # service unit.
