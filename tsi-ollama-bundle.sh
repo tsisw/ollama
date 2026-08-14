@@ -239,11 +239,13 @@ resolve_toolbox_dir_for_target() {
     dir="${MLIR_SDK_VERSION}/toolbox/build/install-${target}"
   fi
 
-  [ -d "${dir}" ] || die "TOOLBOX_DIR (${target}) not found: ${dir}"
-  [ -d "${dir}/lib/cmake/TSICommon" ] || die "TOOLBOX_DIR (${target}) doesn't look like a toolbox install (missing lib/cmake/TSICommon): ${dir}"
+  local dir_label="${override_source:-TOOLBOX_DIR}"
+
+  [ -d "${dir}" ] || die "${dir_label} (${target}) not found: ${dir}"
+  [ -d "${dir}/lib/cmake/TSICommon" ] || die "${dir_label} (${target}) doesn't look like a toolbox install (missing lib/cmake/TSICommon): ${dir}"
 
   if [ "${target}" = "fpga" ]; then
-    [ -f "${dir}/lib/cmake/toolchains/arm.cmake" ] || die "TOOLBOX_DIR (fpga) is missing lib/cmake/toolchains/arm.cmake: ${dir}"
+    [ -f "${dir}/lib/cmake/toolchains/arm.cmake" ] || die "${dir_label} (fpga) is missing lib/cmake/toolchains/arm.cmake: ${dir}"
   fi
 
   TOOLBOX_DIR="${dir}"
