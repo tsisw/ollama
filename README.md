@@ -288,7 +288,7 @@ SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh patch
 # Via command line argument
 SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh --toolbox-dir /path/to/toolbox/install-fpga
 
-# Via environment variable
+# Via environment variable (legacy, fpga only -- see "per target" below for posix)
 TOOLBOX_DIR=/path/to/toolbox/install-fpga ./tsi-ollama-bundle.sh
 
 # Short form
@@ -296,6 +296,30 @@ SDK_VERSION=<sdk version e.g. 0.3.2> ./tsi-ollama-bundle.sh -t /path/to/toolbox/
 ```
 
 **Priority order:** Command line argument > Environment variable > Default path
+
+#### Specify toolbox directory per target (posix / fpga independently)
+
+For internal testing, or to substitute a custom toolbox build when the SDK's own
+toolbox install is broken, `TOOLBOX_POSIX` and `TOOLBOX_FPGA` override each
+target's toolbox directory independently. Each is consulted only for its own
+build step, so setting one never affects the other target -- including in the
+default build, which builds both:
+
+```bash
+# Override posix's toolbox only; fpga still uses the SDK default
+TOOLBOX_POSIX=/path/to/custom/install-posix SDK_VERSION=0.4.24 ./tsi-ollama-bundle.sh
+
+# Override fpga's toolbox only; posix still uses the SDK default
+TOOLBOX_FPGA=/path/to/custom/install-fpga SDK_VERSION=0.4.24 ./tsi-ollama-bundle.sh
+
+# Override both independently
+TOOLBOX_POSIX=/path/to/custom/install-posix TOOLBOX_FPGA=/path/to/custom/install-fpga \
+  SDK_VERSION=0.4.24 ./tsi-ollama-bundle.sh
+```
+
+The legacy `TOOLBOX_DIR` env var above is a backward-compatible alias for
+`TOOLBOX_FPGA` -- it never affects posix. If both `TOOLBOX_FPGA` and `TOOLBOX_DIR`
+are set, `TOOLBOX_FPGA` wins.
 
 #### Combined options
 

@@ -63,6 +63,22 @@ ORIG_PWD="$(pwd)"
 [ -d "llama" ] || die "llama directory not found."
 [ -f "CMakeLists.txt" ] || die "CMakeLists.txt not found. Please run from Ollama root."
 
+# TOOLBOX_POSIX and TOOLBOX_FPGA (below, consulted directly inside
+# resolve_toolbox_dir_for_target()) let a caller override each target's
+# toolbox directory independently -- useful for internal testing, or to
+# substitute a custom toolbox build when the SDK's own toolbox is broken.
+# Neither needs capturing here since the script never reassigns them.
+#
+# TOOLBOX_DIR (bare, no suffix) is the older, single-variable form. It is
+# captured once here, before resolve_toolbox_dir_for_target() starts
+# reassigning/exporting the plain TOOLBOX_DIR variable per build step --
+# otherwise, by the time that function runs a second time (posix then
+# fpga), the caller's original value would already be overwritten by
+# whatever the first call left there. It is kept as a backward-compatible
+# alias for TOOLBOX_FPGA only, matching its historical, exclusively-fpga
+# meaning (see resolve_toolbox_dir_for_target()'s header comment below).
+TOOLBOX_DIR_LEGACY="${TOOLBOX_DIR:-}"
+
 ARCH="$(select_arch)"
 
 BUILD_TYPE="debug"
@@ -137,45 +153,124 @@ for arg in "$@"; do
   esac
 done
 
+# Resolves MLIR_COMPILER_DIR/MLIR_SDK_VERSION only -- the SDK's compiler
+# install is the same directory regardless of build target (posix vs fpga).
+# Toolbox is NOT resolved here: see resolve_toolbox_dir_for_target() below,
+# which each build step calls with its own already-known target. A single
+# unconditional install-fpga default here would be wrong to hand to a
+# posix-specific consumer -- mirrors tsi-pkg-build.sh's resolve_paths()/
+# resolve_toolbox_dir_for_target() split.
 resolve_sdk_paths() {
   local arch="$1"
 
   MLIR_SDK_VERSION="${MLIR_SDK_VERSION:-/proj/rel/sw/tsi-sw/staging/sdk/sdk-r.${SDK_VERSION}/${arch}}"
   MLIR_COMPILER_DIR="${MLIR_COMPILER_DIR:-${MLIR_SDK_VERSION}/compiler}"
-  TOOLBOX_DIR="${TOOLBOX_DIR:-${MLIR_SDK_VERSION}/toolbox/build/install-fpga}"
-  TSICommon_DIR="${TOOLBOX_DIR}/lib/cmake/TSICommon"
 
   [ -d "${MLIR_COMPILER_DIR}" ] || die "MLIR_COMPILER_DIR not found: ${MLIR_COMPILER_DIR}"
-  [ -d "${TOOLBOX_DIR}" ] || die "TOOLBOX_DIR not found: ${TOOLBOX_DIR}"
-  [ -d "${TSICommon_DIR}" ] || die "TSICommon_DIR not found: ${TSICommon_DIR}"
 
   export SDK_VERSION
   export MLIR_SDK_VERSION
   export MLIR_COMPILER_DIR
   export COMPILER_INSTALL_DIR="${MLIR_COMPILER_DIR}"
-  export TOOLBOX_DIR
-  export TSICommon_DIR
   export FAU_LOOKUP_TABLE_PATH="${MLIR_SDK_VERSION}/ffm/txe-ffm-cpp/third-party/FAU/include/"
 
   log_info "SDK_VERSION:        ${SDK_VERSION}"
   log_info "MLIR_SDK_VERSION:   ${MLIR_SDK_VERSION}"
   log_info "MLIR_COMPILER_DIR:  ${MLIR_COMPILER_DIR}"
-  log_info "TOOLBOX_DIR:        ${TOOLBOX_DIR}"
-  log_info "TSICommon_DIR:      ${TSICommon_DIR}"
+}
+
+# Resolves TOOLBOX_DIR for a single, explicitly-named build target ("posix"
+# or "fpga") -- called by build_ollama_posix() (posix) and
+# build_ollama_fpga() (fpga), each already knowing its own target
+# unambiguously.
+#
+# Each target has its own dedicated override variable, consulted BY NAME
+# only in that target's own case branch below: TOOLBOX_POSIX can only ever
+# affect the posix build, TOOLBOX_FPGA can only ever affect the fpga build.
+# There is no variable shared between the two branches, so there is nothing
+# for a caller to set once and have it apply to (or accidentally leak into)
+# the wrong target -- e.g. pointing TOOLBOX_FPGA at a custom install-fpga
+# can never cause that (aarch64) libomp.so to be linked into the x86_64
+# posix binary, because build_ollama_posix()'s call into this function with
+# target=posix never reads TOOLBOX_FPGA at all.
+#
+# TOOLBOX_DIR (bare, no suffix) is kept as a backward-compatible alias for
+# TOOLBOX_FPGA only, matching its historical, exclusively-fpga meaning --
+# README.md's "Specify toolbox directory" section has only ever documented
+# it pointing at a custom install-fpga, and posix's toolbox resolution
+# never consumed it (posix_libomp_dir was always independently derived
+# from install-posix). If both TOOLBOX_FPGA and the legacy TOOLBOX_DIR are
+# set, TOOLBOX_FPGA (the newer, explicit name) wins. Because a bare
+# TOOLBOX_DIR is still easy to misread as "applies to everything" (see PR
+# #72 review discussion), if it's set but the target being resolved here is
+# posix, that's logged explicitly below rather than silently doing nothing.
+resolve_toolbox_dir_for_target() {
+  local target="$1" # posix|fpga
+  local dir=""
+  local override="" override_source=""
+
+  case "${target}" in
+    posix)
+      if [ -n "${TOOLBOX_POSIX:-}" ]; then
+        override="${TOOLBOX_POSIX}"
+        override_source="TOOLBOX_POSIX"
+      elif [ -n "${TOOLBOX_DIR_LEGACY:-}" ]; then
+        log_info "NOTE: TOOLBOX_DIR is set in the environment (${TOOLBOX_DIR_LEGACY}), but it is a legacy alias for TOOLBOX_FPGA only and does not affect the posix build. Set TOOLBOX_POSIX to override posix's toolbox instead."
+      fi
+      ;;
+    fpga)
+      if [ -n "${TOOLBOX_FPGA:-}" ]; then
+        override="${TOOLBOX_FPGA}"
+        override_source="TOOLBOX_FPGA"
+      elif [ -n "${TOOLBOX_DIR_LEGACY:-}" ]; then
+        override="${TOOLBOX_DIR_LEGACY}"
+        override_source="TOOLBOX_DIR (legacy alias for TOOLBOX_FPGA)"
+      fi
+      ;;
+    *)
+      die "resolve_toolbox_dir_for_target: invalid target '${target}' (expected posix or fpga)"
+      ;;
+  esac
+
+  if [ -n "${override}" ]; then
+    dir="${override}"
+    log_info "NOTE: explicit toolbox override in use for the ${target} build step via ${override_source} (see README.md)."
+  else
+    dir="${MLIR_SDK_VERSION}/toolbox/build/install-${target}"
+  fi
+
+  local dir_label="${override_source:-TOOLBOX_DIR}"
+
+  [ -d "${dir}" ] || die "${dir_label} (${target}) not found: ${dir}"
+  [ -d "${dir}/lib/cmake/TSICommon" ] || die "${dir_label} (${target}) doesn't look like a toolbox install (missing lib/cmake/TSICommon): ${dir}"
+
+  if [ "${target}" = "fpga" ]; then
+    [ -f "${dir}/lib/cmake/toolchains/arm.cmake" ] || die "${dir_label} (fpga) is missing lib/cmake/toolchains/arm.cmake: ${dir}"
+  fi
+
+  TOOLBOX_DIR="${dir}"
+  export TOOLBOX_DIR
+  log_info "TOOLBOX_DIR (${target}):  ${TOOLBOX_DIR}"
 }
 
 setup_native_toolchain() {
-  export CC="/proj/local/gcc-13.3.0/bin/gcc"
-  export CXX="/proj/local/gcc-13.3.0/bin/g++"
+  # Host toolchain for native (posix) builds. Not SDK/toolbox-derived -- this
+  # is the build host's own local GCC install, kept in one place and
+  # overridable via env var rather than repeated as a literal at each use
+  # site (here and build_ollama_posix()'s linker flags). Mirrors
+  # tsi-pkg-build.sh's HOST_GCC_DIR.
+  export HOST_GCC_DIR="${HOST_GCC_DIR:-/proj/local/gcc-13.3.0}"
+  export CC="${HOST_GCC_DIR}/bin/gcc"
+  export CXX="${HOST_GCC_DIR}/bin/g++"
 
   export CGO_ENABLED=1
   export CGO_CC="${CC}"
   export CGO_CXX="${CXX}"
 
-  export PATH="/proj/local/gcc-13.3.0/bin:${PATH}"
-  export LD_LIBRARY_PATH="/proj/local/gcc-13.3.0/lib64:${LD_LIBRARY_PATH:-}"
+  export PATH="${HOST_GCC_DIR}/bin:${PATH}"
+  export LD_LIBRARY_PATH="${HOST_GCC_DIR}/lib64:${LD_LIBRARY_PATH:-}"
 
-  export CGO_LDFLAGS="${CGO_LDFLAGS:-} -L/proj/local/gcc-13.3.0/lib64 -Wl,-rpath,/proj/local/gcc-13.3.0/lib64 -lstdc++fs"
+  export CGO_LDFLAGS="${CGO_LDFLAGS:-} -L${HOST_GCC_DIR}/lib64 -Wl,-rpath,${HOST_GCC_DIR}/lib64 -lstdc++fs"
 }
 
 sync_and_patch_llama_vendor() {
@@ -263,13 +358,14 @@ build_ollama_posix() {
 
   setup_native_toolchain
   compute_perf_defs "posix"
+  resolve_toolbox_dir_for_target posix || return 1
 
   rm -rf build-posix
 
   local triton_defs="-DTRITON_ADD=1 -DTRITON_MAT_MUL=1 -DTRITON_DEBUG=0"
   local common="-DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DGGML_NATIVE=ON -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DGGML_AVX512_BF16=OFF -DGGML_AVX_VNNI=OFF -DOLLAMA=ON"
   local cflags_base="-DGGML_TARGET_POSIX -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON ${triton_defs}-mno-amx-tile -mno-amx-int8 -mno-amx-bf16 -mno-avx512bf16 -mno-avxvnni"
-  local posix_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-posix/lib"
+  local posix_libomp_dir="${TOOLBOX_DIR}/lib"
   [ -f "${posix_libomp_dir}/libomp.so" ] || die "POSIX libomp.so not found: ${posix_libomp_dir}/libomp.so"
 
   run cmake -B build-posix ${common} \
@@ -277,8 +373,8 @@ build_ollama_posix() {
     -DCMAKE_CXX_COMPILER="${CXX}" \
     -DCMAKE_C_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
     -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${cflags_base}" \
-    -DCMAKE_EXE_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L/proj/local/gcc-13.3.0/lib64 -Wl,-rpath-link,/proj/local/gcc-13.3.0/lib64 -Wl,-rpath,/proj/local/gcc-13.3.0/lib64 -lomp -lgcc_s" \
-    -DCMAKE_SHARED_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L/proj/local/gcc-13.3.0/lib64 -Wl,-rpath-link,/proj/local/gcc-13.3.0/lib64 -Wl,-rpath,/proj/local/gcc-13.3.0/lib64 -lomp -lgcc_s" || return 1
+    -DCMAKE_EXE_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L${HOST_GCC_DIR}/lib64 -Wl,-rpath-link,${HOST_GCC_DIR}/lib64 -Wl,-rpath,${HOST_GCC_DIR}/lib64 -lomp -lgcc_s" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L${HOST_GCC_DIR}/lib64 -Wl,-rpath-link,${HOST_GCC_DIR}/lib64 -Wl,-rpath,${HOST_GCC_DIR}/lib64 -lomp -lgcc_s" || return 1
 
   run cmake --build build-posix --config Release || return 1
 
@@ -291,6 +387,7 @@ build_ollama_fpga() {
   log_info "building Ollama FPGA/ARM64"
 
   compute_perf_defs "fpga"
+  resolve_toolbox_dir_for_target fpga || return 1
 
   rm -rf build-fpga
 
@@ -298,7 +395,7 @@ build_ollama_fpga() {
   [ -f "${ARM_TOOLCHAIN_FILE}" ] || die "ARM toolchain file not found: ${ARM_TOOLCHAIN_FILE}"
 
   local triton_defs="-DTRITON_ADD=1 -DTRITON_MAT_MUL=1 -DTRITON_DEBUG=0"
-  local fpga_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-fpga/lib"
+  local fpga_libomp_dir="${TOOLBOX_DIR}/lib"
   [ -f "${fpga_libomp_dir}/libomp.so" ] || die "FPGA/aarch64 libomp.so not found: ${fpga_libomp_dir}/libomp.so"
 
   run cmake -B build-fpga \
@@ -596,7 +693,9 @@ package_ollama_posix() {
 
   cp build-posix/lib/ollama/libggml-*.so "${release_dir}/bin/" 2>/dev/null || true
   cp build-posix/lib/ollama/libggml-*.so "${release_dir}/lib/" 2>/dev/null || true
-  local posix_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-posix/lib"
+  # TOOLBOX_DIR is install-posix here: build_ollama_posix() (called immediately
+  # before this in main()) already resolved it via resolve_toolbox_dir_for_target.
+  local posix_libomp_dir="${TOOLBOX_DIR}/lib"
   copy_libomp_files "${posix_libomp_dir}" "${release_dir}/bin"
   copy_libomp_files "${posix_libomp_dir}" "${release_dir}/lib"
 
@@ -625,7 +724,9 @@ package_ollama_fpga() {
 
   cp build-fpga/lib/ollama/libggml-*.so "${release_dir}/bin/" 2>/dev/null || true
   cp build-fpga/lib/ollama/libggml-*.so "${release_dir}/lib/" 2>/dev/null || true
-  local fpga_libomp_dir="${MLIR_SDK_VERSION}/toolbox/build/install-fpga/lib"
+  # TOOLBOX_DIR is install-fpga here: build_ollama_fpga() (called immediately
+  # before this in main()) already resolved it via resolve_toolbox_dir_for_target.
+  local fpga_libomp_dir="${TOOLBOX_DIR}/lib"
   copy_libomp_files "${fpga_libomp_dir}" "${release_dir}/bin"
   copy_libomp_files "${fpga_libomp_dir}" "${release_dir}/lib"
 
