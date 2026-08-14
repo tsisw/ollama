@@ -178,17 +178,29 @@ resolve_sdk_paths() {
 # build_ollama_fpga() (fpga), each already knowing its own target
 # unambiguously.
 #
-# TOOLBOX_DIR_OVERRIDE (captured once at script start) applies ONLY to the
-# fpga target -- README.md's "Specify toolbox directory" section documents
-# this override exclusively as a way to point at a custom install-fpga
-# (every example uses that path), and posix's toolbox resolution never
-# consumed it before this function existed either (posix_libomp_dir was
-# always independently derived from install-posix). Applying it to posix
-# too would mean a caller pointing TOOLBOX_DIR at a custom install-fpga for
-# the fpga build -- the documented use case -- gets that same (aarch64)
-# libomp.so linked into the x86_64 posix binary during the default combined
-# build, silently breaking it despite passing the existence check (a file
-# named libomp.so genuinely exists there, just for the wrong architecture).
+# TOOLBOX_DIR_OVERRIDE (captured once at script start, so it reflects
+# whatever the caller had in their environment -- not whatever the previous
+# call to this function last assigned to the plain TOOLBOX_DIR var) applies
+# ONLY to the fpga target -- README.md's "Specify toolbox directory" section
+# documents this override exclusively as a way to point at a custom
+# install-fpga (every example uses that path), and posix's toolbox
+# resolution never consumed it before this function existed either
+# (posix_libomp_dir was always independently derived from install-posix).
+# Applying it to posix too would mean a caller pointing TOOLBOX_DIR at a
+# custom install-fpga for the fpga build -- the documented use case -- gets
+# that same (aarch64) libomp.so linked into the x86_64 posix binary during
+# the default combined build, silently breaking it despite passing the
+# existence check (a file named libomp.so genuinely exists there, just for
+# the wrong architecture).
+#
+# This function is called once per target (posix, then fpga, in that order
+# for the default combined build), and TOOLBOX_DIR_OVERRIDE stays set the
+# whole time regardless of which target is running -- so without an
+# explicit log line for the "ignored" case, a caller who set TOOLBOX_DIR
+# for fpga would see it silently have no effect during the posix step, with
+# nothing in the log to indicate the override was even seen. Both branches
+# below log what happened for their target, so the fpga-only scope of the
+# override is visible in the log either way, not just when it's honored.
 resolve_toolbox_dir_for_target() {
   local target="$1" # posix|fpga
   local dir
@@ -203,6 +215,9 @@ resolve_toolbox_dir_for_target() {
     log_info "NOTE: explicit TOOLBOX_DIR override in use for the fpga build step (documented usage -- see README.md)."
   else
     dir="${MLIR_SDK_VERSION}/toolbox/build/install-${target}"
+    if [ -n "${TOOLBOX_DIR_OVERRIDE:-}" ]; then
+      log_info "NOTE: TOOLBOX_DIR is set in the environment (${TOOLBOX_DIR_OVERRIDE}), but the override only applies to the fpga build step; ignoring it for ${target} and using ${dir} instead."
+    fi
   fi
 
   [ -d "${dir}" ] || die "TOOLBOX_DIR (${target}) not found: ${dir}"
