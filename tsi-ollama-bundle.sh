@@ -64,12 +64,13 @@ ORIG_PWD="$(pwd)"
 [ -f "CMakeLists.txt" ] || die "CMakeLists.txt not found. Please run from Ollama root."
 
 # Captured once, before anything else touches TOOLBOX_DIR: if the caller
-# exported it, honor that single directory for whichever target(s) get
-# built (same contract tsi-pkg-build.sh's positional TOOLBOX_DIR override
-# has). resolve_toolbox_dir_for_target() below re-derives and overwrites
-# the plain TOOLBOX_DIR variable per target, so this captured copy is what
-# lets it tell "caller set this" apart from "I set this on an earlier call
-# for the other target."
+# exported it, resolve_toolbox_dir_for_target() below honors it for the
+# fpga target only (README.md's "Specify toolbox directory" section
+# documents this as pointing at a custom install-fpga). Captured into a
+# separate variable because resolve_toolbox_dir_for_target() re-derives
+# and overwrites the plain TOOLBOX_DIR per target on each call, so this
+# copy is what lets it tell "caller set this" apart from "I set this on an
+# earlier call for the other target."
 TOOLBOX_DIR_OVERRIDE="${TOOLBOX_DIR:-}"
 
 ARCH="$(select_arch)"
@@ -175,13 +176,19 @@ resolve_sdk_paths() {
 # Resolves TOOLBOX_DIR for a single, explicitly-named build target ("posix"
 # or "fpga") -- called by build_ollama_posix() (posix) and
 # build_ollama_fpga() (fpga), each already knowing its own target
-# unambiguously. Honors TOOLBOX_DIR_OVERRIDE (captured once at script start,
-# before this function ever runs) for either target: the caller asserts
-# that single directory is correct for everything being built. We can't
-# reliably auto-detect "is this install-fpga vs install-posix" from content
-# alone (the toolchain cmake files are byte-identical between the two
-# installs on every SDK release checked so far), so an override is trusted
-# with a visible NOTE rather than silently replaced.
+# unambiguously.
+#
+# TOOLBOX_DIR_OVERRIDE (captured once at script start) applies ONLY to the
+# fpga target -- README.md's "Specify toolbox directory" section documents
+# this override exclusively as a way to point at a custom install-fpga
+# (every example uses that path), and posix's toolbox resolution never
+# consumed it before this function existed either (posix_libomp_dir was
+# always independently derived from install-posix). Applying it to posix
+# too would mean a caller pointing TOOLBOX_DIR at a custom install-fpga for
+# the fpga build -- the documented use case -- gets that same (aarch64)
+# libomp.so linked into the x86_64 posix binary during the default combined
+# build, silently breaking it despite passing the existence check (a file
+# named libomp.so genuinely exists there, just for the wrong architecture).
 resolve_toolbox_dir_for_target() {
   local target="$1" # posix|fpga
   local dir
@@ -191,9 +198,9 @@ resolve_toolbox_dir_for_target() {
     *) die "resolve_toolbox_dir_for_target: invalid target '${target}' (expected posix or fpga)" ;;
   esac
 
-  if [ -n "${TOOLBOX_DIR_OVERRIDE:-}" ]; then
+  if [ "${target}" = "fpga" ] && [ -n "${TOOLBOX_DIR_OVERRIDE:-}" ]; then
     dir="${TOOLBOX_DIR_OVERRIDE}"
-    log_info "NOTE: explicit TOOLBOX_DIR override in use for the ${target} build step -- caller is responsible for it being ${target}-appropriate."
+    log_info "NOTE: explicit TOOLBOX_DIR override in use for the fpga build step (documented usage -- see README.md)."
   else
     dir="${MLIR_SDK_VERSION}/toolbox/build/install-${target}"
   fi
