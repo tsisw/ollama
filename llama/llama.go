@@ -174,6 +174,17 @@ func (c *Context) Model() *Model {
 	return &Model{c: C.llama_get_model(c.c)}
 }
 
+// PerfPrint prints llama.cpp's load/prompt-eval/eval timing summary (and,
+// when the tsavorite backend is built with GGML_PERF/GGML_PERF_DETAIL, the
+// per-op "GGML Perf Summary" breakdown) for this context, matching what
+// llama.cpp's own CLI tools print once per run via llama_perf_context_print.
+// Ollama's Go-based generation loop never called this on its own, so this
+// data was silently never printed even though the underlying accounting
+// (ggml_perf_accumulate) already runs during every Decode call.
+func (c *Context) PerfPrint() {
+	C.llama_perf_context_print(c.c)
+}
+
 func (c *Context) KvCacheSeqAdd(seqId int, p0 int, p1 int, delta int) {
 	C.llama_memory_seq_add(C.llama_get_memory(c.c), C.int(seqId), C.int(p0), C.int(p1), C.int(delta))
 }

@@ -684,6 +684,12 @@ func (s *Server) completion(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, fmt.Sprintf("failed to encode final response: %v", err), http.StatusInternalServerError)
 				}
 
+				// Matches llama.cpp's own CLI tools, which call this once per
+				// run after generation completes -- ollama's Go loop never
+				// called it, so this profiling data was never printed even
+				// though the underlying per-op accounting already runs.
+				s.lc.PerfPrint()
+
 				return
 			}
 		}
