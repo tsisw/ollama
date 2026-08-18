@@ -1,6 +1,99 @@
 #!/usr/bin/env bash
 set -o pipefail
 
+# ==============================================================================
+# HOW THE LLAMA.CPP SYNC PIPELINE WORKS (Makefile.sync + llama/patches/*)
+# ==============================================================================
+#
+# Ollama does not carry its own copy of llama.cpp/ggml source. It vendors it in
+# from our llama.cpp repo (which already has the Tsavorite backend built in),
+# using two independent, unrelated pieces of information:
+#
+#   1. Makefile.sync's FETCH_HEAD -- a single llama.cpp commit hash. This says
+#      *which point in llama.cpp's history* to start from.
+#   2. llama/patches/tsi-consolidated-patches.patch -- Ollama's own, separately
+#      maintained list of local-only changes, layered on top regardless of
+#      which commit-id is chosen. This file lives in Ollama's git history, not
+#      llama.cpp's, and has nothing to do with the commit-id above.
+#
+# The actual sync happens in three stages, run by sync_and_patch_llama_vendor()
+# below and (for the llama/llama.cpp/ half) via `make -f Makefile.sync
+# llama/llama.cpp` directly:
+#
+#   Stage A - checkout:
+#     git fetch + git checkout <FETCH_HEAD>  ->  INTO llama/vendor/
+#     llama/vendor/ is a full, separate clone of the llama.cpp repo. It is
+#     NEVER compiled directly -- it's a disposable staging area. After this
+#     stage it contains raw llama.cpp source, exactly as of that one commit,
+#     with nothing added yet.
+#
+#   Stage B - patch:
+#     git apply llama/patches/tsi-consolidated-patches.patch
+#     (run inside llama/vendor/)
+#     This layers Ollama's own local-only changes on top of that raw
+#     checkout. After this stage, llama/vendor/ = upstream commit + our patch.
+#
+#   Stage C - sync into tracked source:
+#     rsync copies files FROM llama/vendor/ (now patched)
+#                          INTO ml/backend/ggml/ggml/   (ggml core + backends)
+#                       and INTO llama/llama.cpp/       (curated llama.cpp core)
+#     THESE two folders are what Ollama's own git actually tracks and what
+#     gets compiled when building Ollama. llama/vendor/ is regenerated/
+#     discarded each time -- it never ships.
+#
+# First run (llama/vendor/ doesn't exist yet):
+#   - Stage A always runs (fresh checkout).
+#   - Stage B's `git apply --check` succeeds (nothing patched yet), so the
+#     patch is actually applied for real.
+#
+# Every subsequent run (llama/vendor/ already exists from a previous run):
+#   - Stage A is skipped ("llama/vendor already exists; skipping checkout") --
+#     llama/vendor/ stays exactly as the previous run left it (already
+#     patched).
+#   - Stage B's `git apply --check` is re-run every single time (it is NOT
+#     "remembered" -- it's actively re-checked). It now FAILS, because the
+#     file's text has already changed from a prior apply, so the patch's
+#     expected "before" text no longer matches. The script correctly treats
+#     this as "already applied" and skips re-applying, rather than erroring.
+#   - This is exactly why the `patch` flag / force_patch exists: it forces a
+#     fresh Stage A checkout first, wiping the already-patched state, so the
+#     patch can be meaningfully re-applied on top of a clean base again.
+#
+# Why bumping FETCH_HEAD is not always "just one file":
+#   If nothing NEW is being introduced -- you're only moving the pin forward
+#   to a later llama.cpp snapshot -- then yes, a human only edits FETCH_HEAD;
+#   everything else (the Stage C sync) is mechanically regenerated and
+#   committed alongside it, but nobody hand-writes those lines. But when a
+#   change also needs new integration work on Ollama's own side (e.g. wiring
+#   a new perf-reporting call through Ollama's Go layer, or fixing an
+#   Ollama-only build script bug), that work has to be hand-written in
+#   Ollama's own non-vendored files too (tsi-ollama-bundle.sh, CMakeLists.txt,
+#   llama/llama.go, runner/llamarunner/runner.go) -- a commit-id bump alone
+#   cannot produce those.
+#
+# The patch-conflict trap:
+#   If a change lands upstream in llama.cpp that duplicates something
+#   tsi-consolidated-patches.patch was ALREADY adding locally as a workaround
+#   (because it didn't exist upstream yet), Stage B will conflict once
+#   FETCH_HEAD is bumped past that point:
+#     - A duplicated *declaration* (e.g. in a header) usually shows up as a
+#       hard `git apply` failure (the surrounding context no longer matches).
+#     - A duplicated *struct field* is the same apply failure, and would ALSO
+#       be a genuine compile error if forced through (C/C++ doesn't allow two
+#       fields with the same name in one struct).
+#     - A duplicated *function definition* (full body, not just a prototype)
+#       is the sneaky one: if the patch's copy lives at a different location
+#       in the file than the file's own copy, `git apply` sees no conflicting
+#       context and applies cleanly with no warning -- but the build then
+#       fails with a hard C++ redefinition error, only discovered by actually
+#       compiling, not by dry-running the patch.
+#   Whenever this happens, tsi-consolidated-patches.patch needs its
+#   now-redundant hunk(s) removed and regenerated, in the SAME PR that bumps
+#   FETCH_HEAD -- otherwise Stage B silently breaks (or a build breaks after
+#   even though the sync itself reports 'no errors').
+#
+# ==============================================================================
+
 log_error(){ echo "ERROR: $*" >&2; }
 log_info(){ echo "INFO: $*"; }
 
@@ -302,6 +395,9 @@ sync_and_patch_llama_vendor() {
   log_info "syncing ml/backend/ggml/ggml"
   run make -f Makefile.sync ml/backend/ggml/ggml || return 1
 
+  log_info "syncing llama/llama.cpp"
+  run make -f Makefile.sync llama/llama.cpp || return 1
+
   return 0
 }
 
@@ -316,26 +412,55 @@ invoke_llama_cpp_build() {
   )
 }
 
+# ggml-tsavorite.cpp (vendored into ml/backend/ggml/ggml/src/ggml-tsavorite/ from
+# llama.cpp) resolves its Tsavorite blob directory via tsavorite_llama_root():
+# it takes its own compiled-in __FILE__ path and strips the fixed suffix
+# "/ggml/src/ggml-tsavorite/ggml-tsavorite.cpp" off the end, then appends
+# "/ggml-tsi-kernel/<posix|fpga>-kernel/build-<posix|fpga>/...". That
+# assumption holds for llama.cpp's own native checkout, where ggml-tsi-kernel
+# really does sit right beside ggml/ -- but for ollama, the same file compiles
+# from ml/backend/ggml/ggml/src/..., so stripping that suffix lands on
+# ml/backend/ggml, and ggml-tsi-kernel was never there (it actually lives
+# under llama/vendor/ggml-tsi-kernel, an unrelated subtree). Without this
+# symlink, any code path that reaches tsi_load_all_blobs() (which happens
+# unconditionally when multi_thread_enable is true) fails immediately with
+# "Failed to load blob ..." and aborts.
+#
+# This mirrors the symlink the bundled ggml.sh already creates for a
+# deployed fpga release (rm -f + ln -s the same two paths), except done
+# automatically for BOTH targets right after the kernels are built, instead
+# of requiring a manual post-build step.
+ensure_ggml_tsi_kernel_symlink() {
+  local link_path="${SCRIPT_DIR}/ml/backend/ggml/ggml-tsi-kernel"
+  local target_path="${SCRIPT_DIR}/llama/vendor/ggml-tsi-kernel"
+
+  [ -d "${target_path}" ] || die "llama/vendor/ggml-tsi-kernel not found (expected after invoke_llama_cpp_build): ${target_path}"
+
+  mkdir -p "$(dirname "${link_path}")"
+  rm -f "${link_path}"
+  ln -s "${target_path}" "${link_path}"
+  log_info "ggml-tsi-kernel symlink ready for Tsavorite blob path resolution: ${link_path} -> ${target_path}"
+}
+
 compute_perf_defs() {
   local target="$1"
   local bt
   bt="$(tolower "${BUILD_TYPE}")"
 
-  PERF_DEF="-DGGML_PERF"
+  # Ollama's actual customer-shipped artifact is the "release" build -- only
+  # that one must hide which ops ran on CPU vs OPU (the GGML_PERF_DETAIL
+  # variant's "Target" and "TSI_KERNEL-RUN" columns in llama-context.cpp's
+  # ggml_perf_print_totals()), so "release" always gets the plain
+  # Op/Runs/Total us/Avg us GGML_PERF_RELEASE table, no backend breakdown.
+  # Every other mode (debug, debug-tmu, debug-tmu-detail, or no mode at all)
+  # is our own internal testing/dev use and shows the full detail table,
+  # regardless of target -- matches llama.cpp's own tsi-pkg-build.sh dev
+  # experience.
+  PERF_DEF="-DGGML_PERF_DETAIL"
   DBG_DEFS=""
 
   if [ "$bt" = "release" ]; then
     PERF_DEF="-DGGML_PERF_RELEASE"
-    DBG_DEFS=""
-    return 0
-  fi
-
-  if [ "$bt" = "debug" ]; then
-    if [ "$target" = "fpga" ]; then
-      PERF_DEF="-DGGML_PERF"
-    else
-      PERF_DEF="-DGGML_PERF_DETAIL"
-    fi
     DBG_DEFS=""
     return 0
   fi
@@ -376,6 +501,18 @@ build_ollama_posix() {
     -DCMAKE_EXE_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L${HOST_GCC_DIR}/lib64 -Wl,-rpath-link,${HOST_GCC_DIR}/lib64 -Wl,-rpath,${HOST_GCC_DIR}/lib64 -lomp -lgcc_s" \
     -DCMAKE_SHARED_LINKER_FLAGS="-L${posix_libomp_dir} -Wl,-rpath,${posix_libomp_dir} -Wl,-rpath-link,${posix_libomp_dir} -L${HOST_GCC_DIR}/lib64 -Wl,-rpath-link,${HOST_GCC_DIR}/lib64 -Wl,-rpath,${HOST_GCC_DIR}/lib64 -lomp -lgcc_s" || return 1
 
+  # llama-context.cpp (llama_perf_context_print/ggml_perf_print_totals) is
+  # compiled via cgo (llama/llama.go's own #cgo CXXFLAGS), a completely
+  # separate compilation path from this CMake build -- CMAKE_CXX_FLAGS above
+  # never reaches it. CGO_CXXFLAGS is the equivalent env var cgo honors, so
+  # PERF_DEF has to be exported here too or the perf table silently never
+  # compiles in for that file, regardless of what CMAKE_CXX_FLAGS says.
+  # -DOLLAMA is also required here: llama-context.cpp resolves
+  # ggml_perf_accumulate dynamically (via ggml_backend_reg_get_proc_address)
+  # only when OLLAMA is defined, since ggml.c lives in a separately dlopen'd
+  # backend .so and is not link-time visible to this statically-linked file.
+  export CGO_CXXFLAGS="${PERF_DEF} ${DBG_DEFS} -DOLLAMA"
+
   run cmake --build build-posix --config Release || return 1
 
   [ -f "build-posix/ollama" ] || die "build-posix/ollama not found after build"
@@ -409,6 +546,13 @@ build_ollama_fpga() {
     -DCMAKE_CXX_FLAGS="${PERF_DEF} ${DBG_DEFS} ${triton_defs} -DGGML_TSAVORITE -DTMU_SUPPORTED -DTVU_SUPPORTED -DOLLAMA=ON" \
     -DCMAKE_EXE_LINKER_FLAGS="-L${fpga_libomp_dir} -Wl,-rpath,${fpga_libomp_dir} -Wl,-rpath-link,${fpga_libomp_dir} -lomp" \
     -DCMAKE_SHARED_LINKER_FLAGS="-L${fpga_libomp_dir} -Wl,-rpath,${fpga_libomp_dir} -Wl,-rpath-link,${fpga_libomp_dir} -lomp" || return 1
+
+  # See build_ollama_posix()'s matching comment -- llama-context.cpp compiles
+  # via cgo, not this CMake invocation, so CMAKE_CXX_FLAGS above never
+  # reaches it; CGO_CXXFLAGS is the env var cgo actually honors. -DOLLAMA is
+  # required for the same reason: it selects the dynamic-lookup path for
+  # ggml_perf_accumulate in llama-context.cpp.
+  export CGO_CXXFLAGS="${PERF_DEF} ${DBG_DEFS} -DOLLAMA"
 
   run cmake --build build-fpga --config Release || return 1
 
@@ -766,6 +910,8 @@ main() {
   if [ "${DO_CLEAN}" -eq 1 ] || [ "${DO_CLEAN_ALL}" -eq 1 ]; then
     return 0
   fi
+
+  ensure_ggml_tsi_kernel_symlink || return 1
 
   if [ "${DO_BUILD_POSIX}" -eq 1 ]; then
     build_ollama_posix || return 1

@@ -115,9 +115,25 @@ if (GGML_TSAVORITE)
         set(CMAKE_CROSSCOMPILING ON)
         set(ARCH_FLAGS -march=armv8-a)
         file(GLOB TLIBS  "${RUNTIME_DIR}/lib/*.so" "${GGML_TSI_KERNEL_DIR}/host/*.o" "${RUNTIME_DIR}/../utils/lib/TsavRTShimCAPI.cpp.o")
+        # RUNTIME_DIR/lib is a directory shared with other targets' runtime
+        # libraries (e.g. libTsavRTPosix.so lives alongside libTsavRTFPGA.so);
+        # the glob above pulls in everything in that directory, not just what
+        # this target needs. libTsavRTPosix.so and libTsavRTFPGA.so both
+        # export a colliding tsi::runtime::TsavRT::allocate symbol, so linking
+        # both into the same binary makes symbol resolution non-deterministic
+        # (which implementation actually runs can vary by process/ASLR),
+        # causing intermittent SIGSEGV crashes deep in TXE op execution.
+        # Excluding the other target's runtime library here guarantees only
+        # one implementation is ever linked in.
+        list(FILTER TLIBS EXCLUDE REGEX "libTsavRTPosix\\.so")
         message("Setting target as fpga")
     elseif (${GGML_TSAVORITE_TARGET} STREQUAL "posix")
         file(GLOB TLIBS  "${RUNTIME_DIR}/lib/*.so" "${GGML_TSI_KERNEL_DIR}/host/*.o" "${MLIR_COMPILER_DIR}/lib/libFFMDeviceShim.so" "${MLIR_COMPILER_DIR}/lib/libTsavRTPosixShimCAPI.so" "${MLIR_COMPILER_DIR}/lib/libtxe-ffm-c-native.so" "${MLIR_COMPILER_DIR}/lib/libtxe-ffm-cpp.so" "${MLIR_COMPILER_DIR}/lib/libtvu_fau_full.so")
+        # See the fpga branch above -- RUNTIME_DIR/lib for posix also ships
+        # libTsavRTFPGA.so alongside libTsavRTPosix.so; exclude it so the
+        # colliding TsavRT::allocate symbol always resolves to the Posix
+        # implementation.
+        list(FILTER TLIBS EXCLUDE REGEX "libTsavRTFPGA\\.so")
         message("Setting target as posix for tsavorite")
     endif()
 
