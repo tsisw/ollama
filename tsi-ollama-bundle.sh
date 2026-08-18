@@ -369,14 +369,45 @@ setup_native_toolchain() {
 sync_and_patch_llama_vendor() {
   local force_patch="$1"
 
+  # A stale llama/vendor is silently wrong, not just slow: if FETCH_HEAD in
+  # Makefile.sync is bumped and this script is rerun on a workspace where
+  # llama/vendor already exists (checked out at the OLD commit), directory
+  # existence alone used to be enough to skip checkout entirely -- the build
+  # would then silently compile the old commit with no error. Compare
+  # llama/vendor's actual HEAD against Makefile.sync's FETCH_HEAD so a pin
+  # bump is never silently ignored on an existing workspace.
+  local fetch_head
+  fetch_head="$(sed -n 's/^FETCH_HEAD=//p' Makefile.sync)"
+  [ -n "${fetch_head}" ] || die "could not read FETCH_HEAD from Makefile.sync"
+
+  local need_checkout=0
   if [ "${force_patch}" -eq 1 ]; then
-    log_info "patch requested: syncing llama/vendor and applying TSI patch"
-    run make -f Makefile.sync checkout || return 1
+    need_checkout=1
   elif [ ! -d "llama/vendor" ]; then
-    log_info "llama/vendor missing: syncing llama/vendor and applying TSI patch"
-    run make -f Makefile.sync checkout || return 1
+    need_checkout=1
   else
-    log_info "llama/vendor already exists; skipping checkout"
+    local vendor_head
+    vendor_head="$(git -C llama/vendor rev-parse HEAD 2>/dev/null || true)"
+    if [ "${vendor_head}" != "${fetch_head}" ]; then
+      log_info "llama/vendor is at ${vendor_head:-<unknown>}, Makefile.sync's FETCH_HEAD is ${fetch_head}; re-syncing"
+      need_checkout=1
+    fi
+  fi
+
+  if [ "${need_checkout}" -eq 1 ]; then
+    log_info "syncing llama/vendor and applying TSI patch"
+    run make -f Makefile.sync checkout || return 1
+    # git checkout -f only resets tracked files; it never removes untracked
+    # ones. If llama/vendor previously had the TSI patch applied, the new
+    # files it adds (e.g. mem_hip.cpp/mem_nvml.cpp) are untracked and survive
+    # the checkout, so re-applying the patch fails with "already exists in
+    # working directory" -- which the check below can't distinguish from a
+    # genuine conflict, so it silently skips applying the patch at all.
+    # Clean untracked files after every fresh checkout so the patch always
+    # applies against a truly pristine tree.
+    run git -C llama/vendor clean -fd || return 1
+  else
+    log_info "llama/vendor already at Makefile.sync's FETCH_HEAD (${fetch_head}); skipping checkout"
   fi
 
   [ -d "llama/vendor" ] || die "llama/vendor still missing after checkout"
@@ -385,8 +416,16 @@ sync_and_patch_llama_vendor() {
     if git -C llama/vendor apply --check ../patches/tsi-consolidated-patches.patch >/dev/null 2>&1; then
       log_info "applying llama/vendor TSI patch"
       run git -C llama/vendor apply ../patches/tsi-consolidated-patches.patch || return 1
+    elif git -C llama/vendor apply --check --reverse ../patches/tsi-consolidated-patches.patch >/dev/null 2>&1; then
+      # Forward check failed but the patch cleanly reverses against the
+      # current tree, i.e. it really is already applied -- not a conflict.
+      log_info "TSI patch already applied; skipping git apply"
     else
-      log_info "TSI patch already applied or not applicable; skipping git apply"
+      # Neither direction applies: this is a genuine conflict against the
+      # current llama/vendor commit, not "already applied". Treating it as
+      # harmless here is exactly the bug class this whole round of fixes is
+      # about -- fail loudly instead of silently shipping an unpatched build.
+      die "llama/patches/tsi-consolidated-patches.patch does not apply to llama/vendor's current commit and is not already applied -- regenerate the patch against this commit before building"
     fi
   else
     log_info "WARNING: llama/patches/tsi-consolidated-patches.patch not found; skipping patch"
@@ -436,9 +475,10 @@ ensure_ggml_tsi_kernel_symlink() {
 
   [ -d "${target_path}" ] || die "llama/vendor/ggml-tsi-kernel not found (expected after invoke_llama_cpp_build): ${target_path}"
 
-  mkdir -p "$(dirname "${link_path}")"
-  rm -f "${link_path}"
-  ln -s "${target_path}" "${link_path}"
+  mkdir -p "$(dirname "${link_path}")" || die "could not create $(dirname "${link_path}")"
+  rm -rf "${link_path}" || die "could not remove existing ${link_path}"
+  ln -s "${target_path}" "${link_path}" || die "could not create symlink ${link_path} -> ${target_path}"
+  [ -L "${link_path}" ] && [ -d "${link_path}" ] || die "symlink ${link_path} does not resolve to a directory after creation"
   log_info "ggml-tsi-kernel symlink ready for Tsavorite blob path resolution: ${link_path} -> ${target_path}"
 }
 
