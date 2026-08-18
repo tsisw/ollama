@@ -688,7 +688,12 @@ func (s *Server) completion(w http.ResponseWriter, r *http.Request) {
 				// run after generation completes -- ollama's Go loop never
 				// called it, so this profiling data was never printed even
 				// though the underlying per-op accounting already runs.
+				// s.mu also guards s.lc: processBatch holds it while decoding,
+				// which updates the same counters PerfPrint reads and resets,
+				// so printing without it races a concurrent completion.
+				s.mu.Lock()
 				s.lc.PerfPrint()
+				s.mu.Unlock()
 
 				return
 			}

@@ -181,8 +181,21 @@ func (c *Context) Model() *Model {
 // Ollama's Go-based generation loop never called this on its own, so this
 // data was silently never printed even though the underlying accounting
 // (ggml_perf_accumulate) already runs during every Decode call.
+//
+// llama.cpp's CLI tools call this exactly once, at the end of a single
+// process invocation. Ollama's server instead reuses one Context across many
+// completions, so calling llama_perf_context_print alone would report
+// ever-growing cumulative totals instead of that one completion's numbers.
+// Resetting immediately after printing makes each call report only the work
+// done since the previous call.
+//
+// Callers must hold the same lock that guards concurrent access to this
+// Context (e.g. the caller's decode mutex) -- these counters are updated by
+// Decode, so printing/resetting without that lock races with a concurrent
+// completion.
 func (c *Context) PerfPrint() {
 	C.llama_perf_context_print(c.c)
+	C.llama_perf_context_reset(c.c)
 }
 
 func (c *Context) KvCacheSeqAdd(seqId int, p0 int, p1 int, delta int) {
