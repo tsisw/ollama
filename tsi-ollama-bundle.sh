@@ -395,6 +395,9 @@ sync_and_patch_llama_vendor() {
   log_info "syncing ml/backend/ggml/ggml"
   run make -f Makefile.sync ml/backend/ggml/ggml || return 1
 
+  log_info "syncing llama/llama.cpp"
+  run make -f Makefile.sync llama/llama.cpp || return 1
+
   return 0
 }
 
