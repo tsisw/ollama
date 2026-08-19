@@ -16,7 +16,8 @@
 // At runtime, point TSI_MLIR_LIB at libtsi-mlir-driver and set TSI_MLIR_EXPORT=1. With the library
 // absent the loader says so once and llama computes every graph itself.
 //
-// Two settings are required under ollama specifically, and both fail silently rather than loudly:
+// Four things are required under ollama specifically. The first two fail silently, the last two fail
+// as a hang or an abort well into a run:
 //
 //	TSI_MLIR_SKIP=0
 //	  The driver defaults to discarding the first graph, because under llama-completion the first
@@ -31,8 +32,20 @@
 //	  A driver built against the wrong headers matches no ops, sees a forward with no rope and no
 //	  embedding lookup, and classifies every graph as "skip".
 //
-// Both failure modes produce correct output on CPU, so the only way to know the accelerator ran is
-// to check the log for "running compiled" and for the absence of "NOT EXPORTING".
+//	link ollama with --export-dynamic (ELF only)
+//	  go build -ldflags='-extldflags "-Wl,--export-dynamic"'. The driver leaves ggml undefined for
+//	  the host to satisfy, and ggml here is compiled into the executable rather than a library, so
+//	  without this its symbols are not in the dynamic table and dlopen fails on ggml_graph_node.
+//	  Mach-O resolves these through -undefined dynamic_lookup instead, so macOS needs nothing.
+//
+//	put the TSI kernel libraries on LD_LIBRARY_PATH
+//	  The blobs the runtime loads link against <mlir-compiler>/install/<component>/lib, not the
+//	  install's top-level lib, and carry no rpath. Missing them aborts the runner at the first
+//	  tsi_load_blob, after the graph has already compiled. mlir-llama.cpp's own run targets derive
+//	  this path; here it is the caller's to set.
+//
+// The first two failure modes produce correct output on CPU, so the only way to know the accelerator
+// ran is to check the log for "running compiled" and for the absence of "NOT EXPORTING".
 package mlir
 
 // The ggml/src include paths below are load-bearing, not convenience: Loader.cpp builds the KV
