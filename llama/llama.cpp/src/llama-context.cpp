@@ -12,6 +12,27 @@
 #include <limits>
 #include <stdexcept>
 
+#if defined(LLAMA_TSI_MLIR_EXPORT)
+// Whole-graph MLIR export (tsi_mlir_export). These symbols are satisfied by tsi/mlir/Loader.cpp,
+// which resolves libtsi-mlir-driver with dlopen on first use. That is what keeps this cheap to
+// enable: the loader is one small translation unit, and the exporter with its ~400 MLIR archives
+// stays behind the .so boundary rather than entering ollama's cgo link line.
+//
+// Guarded on LLAMA_TSI_MLIR_EXPORT alone, so the hooks are live exactly when the loader is linked.
+// With the driver absent every hook reports "not handled" and llama computes the graph itself, the
+// same outcome as TSI_MLIR_EXPORT=0.
+bool tsi_mlir_export_before_compute(struct ggml_cgraph * cgraph);
+bool tsi_mlir_export_after_compute(struct ggml_cgraph * cgraph);
+extern "C" bool tsi_mlir_export_eval_cb(struct ggml_tensor * t, bool ask, void * user_data);
+// Hands the caller's own cb_eval to the hook above so it chains rather than replaces it. Keyed on the
+// scheduler, so concurrent contexts each keep their own chain.
+extern "C" void * tsi_mlir_export_eval_chain(const void * sched,
+                                             bool (*cb)(struct ggml_tensor *, bool, void *),
+                                             void * user_data);
+// TSI_MLIR_EXPORT by the driver's truthiness rule: unset, empty and "0" are all off.
+extern "C" bool tsi_mlir_export_enabled(void);
+#endif
+
 //
 // llama_context
 //
@@ -1440,6 +1461,25 @@ llm_graph_params llama_context::graph_params(
 ggml_status llama_context::graph_compute(
             ggml_cgraph * gf,
                    bool   batched) {
+#ifdef LLAMA_TSI_MLIR_EXPORT
+    // gf is the full forward graph before the scheduler splits it across backends, the only place the
+    // whole forward is visible. Classify the phase here, and install the snapshot callback the
+    // reconstruction depends on.
+    const bool tsi_handled = tsi_mlir_export_before_compute(gf);
+    // The driver's own predicate, not getenv() != nullptr: that is also true for TSI_MLIR_EXPORT=0,
+    // which would leave an explicitly disabled exporter owning the scheduler callback and
+    // snapshotting every weight. One rule, owned by the driver, for both.
+    if (tsi_mlir_export_enabled()) {
+        // Chained, not replaced. cb_eval is public API: a caller uses it to observe every node, and
+        // returning false from it CANCELS the graph. Installing the export hook on its own drops
+        // both. The hook forwards to cparams.cb_eval and returns its verdict, so it observes without
+        // taking the decision away. Keyed on this context's scheduler so a context computing in
+        // parallel cannot be handed our cb_eval.
+        ggml_backend_sched_set_eval_callback(
+            sched.get(), tsi_mlir_export_eval_cb,
+            tsi_mlir_export_eval_chain(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data));
+    }
+#endif
     int n_threads        = batched ? cparams.n_threads_batch : cparams.n_threads;
     ggml_threadpool_t tp = batched ? threadpool_batch        : threadpool;
 
@@ -1456,10 +1496,31 @@ ggml_status llama_context::graph_compute(
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
 
-    auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
-    if (status != GGML_STATUS_SUCCESS) {
-        LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
+    ggml_status status = GGML_STATUS_SUCCESS;
+
+#ifdef LLAMA_TSI_MLIR_EXPORT
+    if (tsi_handled) {
+        // The compiled graph already produced the logits and updated the KV cache, so there is nothing
+        // left for the backends to do and the whole forward pass is skipped.
+        //
+        // Nothing needs allocating either: the caller has already run
+        // ggml_backend_sched_alloc_graph to set this graph's inputs, so every tensor - including the
+        // output that after_compute writes the logits into - already has its buffer. Allocating again
+        // here aborts on GGML_ASSERT(!sched->is_alloc). The next ubatch resets the scheduler before
+        // allocating, so leaving it allocated is correct.
+    } else
+#endif
+    {
+        status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+        if (status != GGML_STATUS_SUCCESS) {
+            LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
+        }
     }
+
+#ifdef LLAMA_TSI_MLIR_EXPORT
+    // after the per-op pass: export/compile/run the whole-graph forward and take its logits
+    tsi_mlir_export_after_compute(gf);
+#endif
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
 

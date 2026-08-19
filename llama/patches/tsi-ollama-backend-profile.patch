@@ -1,0 +1,63 @@
+Restore llama_backend_log_profile, which ollama's Go layer calls.
+
+llama/llama.go calls C.llama_backend_log_profile(), but neither the declaration in
+include/llama.h nor the definition in src/llama.cpp existed in any patch - they were
+hand edits in the checked-in llama/llama.cpp only. A sync therefore deleted both and
+the build failed with:
+
+    llama/llama.go:761:5: could not determine what C.llama_backend_log_profile refers to
+
+which is how this was found: reverting the tree and running the documented
+checkout -> apply-patches -> rsync flow reproduced it immediately.
+
+The body is guarded on GGML_USE_TSAVORITE while the symbol itself is not. Both halves
+matter: llama/llama.go calls the function in every build, so it has to exist; but
+ggml_backend_init_by_name("TSAVORITE") returns null where that backend was not compiled
+in, and ggml_backend_log_profile_info then trips GGML_ASSERT(reg) inside ggml-backend.cpp.
+That is not theoretical - an unguarded first draft of this patch built fine and then died
+with "GGML_ASSERT(reg) failed" on the first request of a macOS build. An empty body is the
+right behaviour there: no tsavorite backend, nothing to profile.
+
+llama_backend_free gains the matching guarded teardown for the same reason: it was also a
+hand edit in the checked-in tree and nothing else releases that backend.
+
+diff --git a/include/llama.h b/include/llama.h
+index a0a660bff..9ae511b57 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -399,6 +399,9 @@ extern "C" {
+     // Call once at the end of the program - currently only used for MPI
+     LLAMA_API void llama_backend_free(void);
+ 
++    // Call once at the end of the program to log profile - currently only used for MPI
++    LLAMA_API void llama_backend_log_profile(void);
++
+     //optional:
+     LLAMA_API void llama_numa_init(enum ggml_numa_strategy numa);
+ 
+diff --git a/src/llama.cpp b/src/llama.cpp
+index 74c49e651..25d0fcb8a 100644
+--- a/src/llama.cpp
++++ b/src/llama.cpp
+@@ -90,7 +90,21 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
+     }
+ }
+ 
++// Guarded on GGML_USE_TSAVORITE, not unconditional. llama/llama.go calls this, so the symbol
++// must exist in every build; but ggml_backend_init_by_name("TSAVORITE") returns null when that
++// backend was not compiled in, and ggml_backend_log_profile_info then trips GGML_ASSERT(reg)
++// inside ggml-backend.cpp. An empty body is the correct behaviour there: nothing to profile.
++extern "C"
++void llama_backend_log_profile(void) {
++#ifdef GGML_USE_TSAVORITE
++    ggml_backend_log_profile_info(ggml_backend_init_by_name("TSAVORITE", NULL));
++#endif
++}
++
+ void llama_backend_free(void) {
++#ifdef GGML_USE_TSAVORITE
++    ggml_backend_free(ggml_backend_init_by_name("TSAVORITE", NULL));
++#endif
+     ggml_quantize_free();
+ }
+ 

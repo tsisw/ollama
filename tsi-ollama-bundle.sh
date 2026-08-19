@@ -288,16 +288,41 @@ sync_and_patch_llama_vendor() {
 
   [ -d "llama/vendor" ] || die "llama/vendor still missing after checkout"
 
-  if [ -f "llama/patches/tsi-consolidated-patches.patch" ]; then
-    if git -C llama/vendor apply --check ../patches/tsi-consolidated-patches.patch >/dev/null 2>&1; then
-      log_info "applying llama/vendor TSI patch"
-      run git -C llama/vendor apply ../patches/tsi-consolidated-patches.patch || return 1
-    else
-      log_info "TSI patch already applied or not applicable; skipping git apply"
+  # TSI patches against llama/vendor, applied in order. Anything under llama/llama.cpp is rsynced
+  # from the vendor and would be overwritten, so a change there has to live here to survive a sync.
+  # (llama/llama.cpp/src/*.go is the exception - the rsync filter protects it.)
+  #
+  #   tsi-consolidated-patches.patch  ollama's own 31 upstream patches, squashed
+  #   tsi-ollama-backend-profile.patch  llama_backend_log_profile, which llama/llama.go calls
+  #   tsi-mlir-export-hook.patch      the whole-graph MLIR export hook (tsi_mlir_export)
+  for patch in tsi-consolidated-patches.patch tsi-ollama-backend-profile.patch tsi-mlir-export-hook.patch; do
+    if [ ! -f "llama/patches/${patch}" ]; then
+      log_info "WARNING: llama/patches/${patch} not found; skipping"
+      continue
     fi
-  else
-    log_info "WARNING: llama/patches/tsi-consolidated-patches.patch not found; skipping patch"
-  fi
+    if git -C llama/vendor apply --check "../patches/${patch}" >/dev/null 2>&1; then
+      log_info "applying llama/vendor patch: ${patch}"
+      run git -C llama/vendor apply "../patches/${patch}" || return 1
+    else
+      # Already applied is the common case on a re-run, so this is not an error. A genuinely
+      # broken patch shows up at build time instead, which is worth knowing when a sync bumps
+      # FETCH_HEAD and a hunk stops matching.
+      log_info "${patch} already applied or not applicable; skipping"
+    fi
+  done
+
+  # BOTH rsync targets, not just ggml. Patching llama/vendor achieves nothing on its own: the build
+  # compiles llama/llama.cpp, and only this target copies the patched vendor into it. Syncing ggml
+  # alone left the MLIR export hook sitting in the vendor where nothing reads it, and the symptom was
+  # not a build error - ollama built, ran, and quietly never reached the accelerator.
+  #
+  # It also repairs a real inconsistency in the checked-in tree: llama/llama.cpp/src/llama.cpp there
+  # calls ggml_backend_log_profile_info while the checked-in ggml headers do not declare it, so a
+  # plain `go build .` fails until this runs. The vendor's pair is self-consistent.
+  #
+  # llama/llama.cpp/src/*.go survives: the rsync filter marks it `protect *.go`.
+  log_info "syncing llama/llama.cpp"
+  run make -f Makefile.sync llama/llama.cpp || return 1
 
   log_info "syncing ml/backend/ggml/ggml"
   run make -f Makefile.sync ml/backend/ggml/ggml || return 1

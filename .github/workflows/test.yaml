@@ -285,3 +285,24 @@ jobs:
         run: |
           make -f Makefile.sync clean checkout apply-patches sync
           git diff --compact-summary --exit-code
+
+  tsi-hook-patch:
+    # The MLIR export hook cannot live in llama/llama.cpp: Makefile.sync rsyncs that directory with
+    # --delete, so it lives as a patch applied to llama/vendor by tsi-ollama-bundle.sh. This checks
+    # that it still applies, in order, after tsi-consolidated-patches.patch.
+    #
+    # Worth a job because a patch that stops applying does not break the build. The bundle script
+    # logs "already applied or not applicable" and continues, ollama builds and answers correctly,
+    # and simply never reaches the accelerator - with no error to grep for, since the code that
+    # would print "NOT EXPORTING" is what went missing.
+    #
+    # Separate from the `patches` job above because that one runs apply-patches, which git-am's
+    # every llama/patches/*.patch. This fork's TSI patches are plain diffs applied with `git apply`,
+    # so they cannot go through that path.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the pinned llama.cpp vendor
+        run: make -f Makefile.sync checkout
+      - name: Verify the TSI patches apply to the vendor
+        run: ./llama/patches/verify-tsi-hook-patch.sh

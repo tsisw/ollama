@@ -12,6 +12,13 @@
 #include <map>
 #include <stdexcept>
 
+#if defined(LLAMA_TSI_MLIR_EXPORT)
+// Whole-graph MLIR export: the KV cache is allocated from TSI shared DRAM so the compiled graph can
+// read it in place instead of being handed a copy. Satisfied by tsi/mlir/Loader.cpp; returns nullptr
+// when the export path is off or the driver library is absent, leaving llama's CPU cache untouched.
+extern "C" ggml_backend_buffer_type_t tsi_mlir_kv_buffer_type(void);
+#endif
+
 //
 // llama_kv_cache
 //
@@ -115,6 +122,21 @@ llama_kv_cache::llama_kv_cache(
 
             dev_name = ggml_backend_dev_name(dev);
         }
+
+#ifdef LLAMA_TSI_MLIR_EXPORT
+        // AFTER the offload block on purpose: that block overwrites buft with the offload device's
+        // type, so assigning before it silently loses - the cache lands on Metal/CUDA and the compiled
+        // graph is handed a copy instead of aliasing DRAM. The point of this path is that llama and the
+        // TXE address the same bytes, so it has to win.
+        //
+        // Staying host memory is what makes that safe: every cache operation (SET_ROWS, shift, defrag,
+        // seq_rm) still runs on the CPU backend exactly as before. Returns nullptr when export is off,
+        // or when the driver library is absent.
+        if (ggml_backend_buffer_type_t dram = tsi_mlir_kv_buffer_type()) {
+            buft     = dram;
+            dev_name = "TSI_DRAM";
+        }
+#endif
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
 

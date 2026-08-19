@@ -89,13 +89,23 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
         }
     }
 }
+// Guarded on GGML_USE_TSAVORITE: ggml_backend_log_profile_info is declared by the ggml-tsavorite
+// patch and defined by that backend, so an ollama built without it did not compile at all. That is
+// not hypothetical - the checked-in tree fails with "use of undeclared identifier
+// 'ggml_backend_log_profile_info'" until Makefile.sync re-syncs the patched ggml headers from
+// llama/vendor. Guarding keeps the profiling hook for a tsavorite build and makes the tree
+// self-consistent for every other one.
 extern "C"
 void llama_backend_log_profile(void) {
+#ifdef GGML_USE_TSAVORITE
     ggml_backend_log_profile_info(ggml_backend_init_by_name("TSAVORITE", NULL));
+#endif
 }
 
 void llama_backend_free(void) {
+#ifdef GGML_USE_TSAVORITE
     ggml_backend_free(ggml_backend_init_by_name("TSAVORITE", NULL));
+#endif
     ggml_quantize_free();
 }
 

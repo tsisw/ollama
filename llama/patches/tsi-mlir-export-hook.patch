@@ -1,0 +1,179 @@
+Whole-graph MLIR export hook (tsi_mlir_export).
+
+Adds the two call sites llama.cpp needs for the TSI compiled path.
+
+  src/llama-context.cpp   the hook in llama_context::graph_compute: classify the
+                          forward before the scheduler splits it across backends,
+                          skip the backend pass when the compiled graph handled it,
+                          and take its logits afterwards
+  src/llama-kv-cache.cpp  place the KV cache in TSI shared DRAM so the compiled
+                          graph aliases it in place instead of being handed a copy
+
+Generated against llama/vendor at FETCH_HEAD with tsi-consolidated-patches.patch
+already applied, which is the order tsi-ollama-bundle.sh uses. It will NOT apply to
+the checked-in llama/llama.cpp, because that directory has drifted from the vendor
+it is supposed to be an rsync of - see below.
+
+The symbols the hook calls are satisfied by tsi/mlir/Loader.cpp, which lives OUTSIDE
+this vendored tree and resolves libtsi-mlir-driver with dlopen. Applying this patch
+therefore costs no MLIR dependency: with no driver present every hook reports "not
+handled" and llama computes the graph itself, the same outcome as TSI_MLIR_EXPORT=0.
+
+Everything is guarded on LLAMA_TSI_MLIR_EXPORT, set in llama/llama.cpp/src/llama.go.
+That file matches `protect *.go` in the rsync filter and so survives a sync; these
+.cpp edits do not, which is the reason this patch exists.
+
+Two runtime settings are required under ollama, both of which fail silently:
+TSI_MLIR_SKIP=0, because ollama's first graph is the prompt rather than a warmup;
+and the driver must be built with -DTSI_HOST_GGML_DIR pointing at ollama's ggml,
+because ggml_op enum values differ between llama.cpp generations. See tsi/mlir/mlir.go.
+
+NOTE on the checked-in tree. llama/llama.cpp is meant to be reproducible as
+vendor@FETCH_HEAD + patches, and currently is not, in both directions:
+
+  * src/llama.cpp there calls llama_backend_log_profile_info and initialises a
+    "TSAVORITE" backend. Neither appears in any patch, and the vendor has 0
+    references to TSAVORITE in that file.
+  * ml/backend/ggml/ggml/include/ggml-backend.h there does NOT declare
+    ggml_backend_log_profile_info, while the vendor's does.
+
+So the checked-in tree calls a function it does not declare, which is why a plain
+`go build .` fails on an undeclared identifier until a sync is run. A sync fixes it
+by replacing both files with the vendor's self-consistent pair, and no guard is
+needed once that happens - which is why, unlike an earlier draft, this patch does
+not touch src/llama.cpp at all.
+
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 5696748ca..aa9a2061d 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -12,6 +12,27 @@
+ #include <limits>
+ #include <stdexcept>
+ 
++#if defined(LLAMA_TSI_MLIR_EXPORT)
++// Whole-graph MLIR export (tsi_mlir_export). These symbols are satisfied by tsi/mlir/Loader.cpp,
++// which resolves libtsi-mlir-driver with dlopen on first use. That is what keeps this cheap to
++// enable: the loader is one small translation unit, and the exporter with its ~400 MLIR archives
++// stays behind the .so boundary rather than entering ollama's cgo link line.
++//
++// Guarded on LLAMA_TSI_MLIR_EXPORT alone, so the hooks are live exactly when the loader is linked.
++// With the driver absent every hook reports "not handled" and llama computes the graph itself, the
++// same outcome as TSI_MLIR_EXPORT=0.
++bool tsi_mlir_export_before_compute(struct ggml_cgraph * cgraph);
++bool tsi_mlir_export_after_compute(struct ggml_cgraph * cgraph);
++extern "C" bool tsi_mlir_export_eval_cb(struct ggml_tensor * t, bool ask, void * user_data);
++// Hands the caller's own cb_eval to the hook above so it chains rather than replaces it. Keyed on the
++// scheduler, so concurrent contexts each keep their own chain.
++extern "C" void * tsi_mlir_export_eval_chain(const void * sched,
++                                             bool (*cb)(struct ggml_tensor *, bool, void *),
++                                             void * user_data);
++// TSI_MLIR_EXPORT by the driver's truthiness rule: unset, empty and "0" are all off.
++extern "C" bool tsi_mlir_export_enabled(void);
++#endif
++
+ //
+ // llama_context
+ //
+@@ -1465,6 +1486,25 @@ llm_graph_params llama_context::graph_params(
+ ggml_status llama_context::graph_compute(
+             ggml_cgraph * gf,
+                    bool   batched) {
++#ifdef LLAMA_TSI_MLIR_EXPORT
++    // gf is the full forward graph before the scheduler splits it across backends, the only place the
++    // whole forward is visible. Classify the phase here, and install the snapshot callback the
++    // reconstruction depends on.
++    const bool tsi_handled = tsi_mlir_export_before_compute(gf);
++    // The driver's own predicate, not getenv() != nullptr: that is also true for TSI_MLIR_EXPORT=0,
++    // which would leave an explicitly disabled exporter owning the scheduler callback and
++    // snapshotting every weight. One rule, owned by the driver, for both.
++    if (tsi_mlir_export_enabled()) {
++        // Chained, not replaced. cb_eval is public API: a caller uses it to observe every node, and
++        // returning false from it CANCELS the graph. Installing the export hook on its own drops
++        // both. The hook forwards to cparams.cb_eval and returns its verdict, so it observes without
++        // taking the decision away. Keyed on this context's scheduler so a context computing in
++        // parallel cannot be handed our cb_eval.
++        ggml_backend_sched_set_eval_callback(
++            sched.get(), tsi_mlir_export_eval_cb,
++            tsi_mlir_export_eval_chain(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data));
++    }
++#endif
+     int n_threads        = batched ? cparams.n_threads_batch : cparams.n_threads;
+     ggml_threadpool_t tp = batched ? threadpool_batch        : threadpool;
+ 
+@@ -1481,11 +1521,32 @@ ggml_status llama_context::graph_compute(
+         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
+     }
+ 
+-    auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+-    if (status != GGML_STATUS_SUCCESS) {
+-        LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
++    ggml_status status = GGML_STATUS_SUCCESS;
++
++#ifdef LLAMA_TSI_MLIR_EXPORT
++    if (tsi_handled) {
++        // The compiled graph already produced the logits and updated the KV cache, so there is nothing
++        // left for the backends to do and the whole forward pass is skipped.
++        //
++        // Nothing needs allocating either: the caller has already run
++        // ggml_backend_sched_alloc_graph to set this graph's inputs, so every tensor - including the
++        // output that after_compute writes the logits into - already has its buffer. Allocating again
++        // here aborts on GGML_ASSERT(!sched->is_alloc). The next ubatch resets the scheduler before
++        // allocating, so leaving it allocated is correct.
++    } else
++#endif
++    {
++        status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
++        if (status != GGML_STATUS_SUCCESS) {
++            LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
++        }
+     }
+ 
++#ifdef LLAMA_TSI_MLIR_EXPORT
++    // after the per-op pass: export/compile/run the whole-graph forward and take its logits
++    tsi_mlir_export_after_compute(gf);
++#endif
++
+     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
+ 
+     return status;
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 10d7b489b..2f832a75e 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -12,6 +12,13 @@
+ #include <map>
+ #include <stdexcept>
+ 
++#if defined(LLAMA_TSI_MLIR_EXPORT)
++// Whole-graph MLIR export: the KV cache is allocated from TSI shared DRAM so the compiled graph can
++// read it in place instead of being handed a copy. Satisfied by tsi/mlir/Loader.cpp; returns nullptr
++// when the export path is off or the driver library is absent, leaving llama's CPU cache untouched.
++extern "C" ggml_backend_buffer_type_t tsi_mlir_kv_buffer_type(void);
++#endif
++
+ //
+ // llama_kv_cache
+ //
+@@ -118,6 +125,21 @@ llama_kv_cache::llama_kv_cache(
+         //     dev_name = ggml_backend_dev_name(dev);
+         // }
+ 
++#ifdef LLAMA_TSI_MLIR_EXPORT
++        // AFTER the offload block on purpose. It is commented out in this tree, but upstream it
++        // overwrites buft with the offload device's type, so assigning before it silently loses and
++        // the compiled graph is handed a copy instead of aliasing DRAM. Placed here so the two trees
++        // do not disagree about which assignment wins.
++        //
++        // Staying host memory is what makes that safe: every cache operation (SET_ROWS, shift,
++        // defrag, seq_rm) still runs on the CPU backend exactly as before. Returns nullptr when
++        // export is off, or when the driver library is absent.
++        if (ggml_backend_buffer_type_t dram = tsi_mlir_kv_buffer_type()) {
++            buft     = dram;
++            dev_name = "TSI_DRAM";
++        }
++#endif
++
+         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
+ 
+         ggml_context * ctx = ctx_for_buft(buft);
