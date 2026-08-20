@@ -643,7 +643,7 @@ index 8bd5449f1..01e2df61a 100644
  
  /**
 diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
-index 97a61152f..f7b69079e 100644
+index 89c45bf..7112b91 100644
 --- a/ggml/src/ggml-cpu/ggml-cpu.c
 +++ b/ggml/src/ggml-cpu/ggml-cpu.c
 @@ -15,6 +15,10 @@
@@ -666,8 +666,8 @@ index 97a61152f..f7b69079e 100644
          THREAD_POWER_THROTTLING_STATE t;
          ZeroMemory(&t, sizeof(t));
          t.Version     = THREAD_POWER_THROTTLING_CURRENT_VERSION;
-@@ -2904,6 +2908,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
-             node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
+@@ -2912,6 +2916,11 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
+             }
          }
  #endif /* GGML_PERF-related flags */
 +

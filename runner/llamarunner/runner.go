@@ -330,6 +330,17 @@ func (s *Server) removeSequence(seqIndex int, reason llm.DoneReason) {
 	seq.cache.InUse = false
 	s.seqs[seqIndex] = nil
 	s.seqsSem.Release(1)
+
+	// Matches llama.cpp's own CLI tools, which print this once per run after
+	// generation completes. Printed (and reset) here, under the processBatch
+	// caller's s.mu, rather than from completion()'s response-streaming loop:
+	// that loop runs unsynchronized with processBatch()'s s.lc.Decode() calls,
+	// so a print from there could race a concurrent Decode() mutating the same
+	// context's perf counters. Server.lc is one shared *Context for the
+	// server's whole lifetime, so without the reset every report after the
+	// first would include every prior request's counts on top of its own.
+	s.lc.PerfPrint()
+	s.lc.PerfReset()
 }
 
 func (s *Server) run(ctx context.Context) {
@@ -683,12 +694,6 @@ func (s *Server) completion(w http.ResponseWriter, r *http.Request) {
 				}); err != nil {
 					http.Error(w, fmt.Sprintf("failed to encode final response: %v", err), http.StatusInternalServerError)
 				}
-
-				// Matches llama.cpp's own CLI tools, which call this once per
-				// run after generation completes -- ollama's Go loop never
-				// called it, so this profiling data was never printed even
-				// though the underlying per-op accounting already runs.
-				s.lc.PerfPrint()
 
 				return
 			}
