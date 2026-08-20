@@ -387,8 +387,8 @@ sync_and_patch_llama_vendor() {
     # explicit "patch" argument, so an existing llama/vendor checked out at
     # the OLD pin just kept building the stale commit. Re-checking out
     # whenever the pin and the vendor's actual HEAD disagree closes that gap.
-    if [ -n "${pinned_head}" ] && [ -n "${vendor_head}" ] && [[ "${vendor_head}" != "${pinned_head}"* ]]; then
-      log_info "llama/vendor HEAD (${vendor_head}) does not match Makefile.sync's pinned FETCH_HEAD (${pinned_head}); re-syncing"
+    if [ -z "${pinned_head}" ] || [ -z "${vendor_head}" ] || [[ "${vendor_head}" != "${pinned_head}"* ]]; then
+      log_info "llama/vendor HEAD (${vendor_head:-unknown}) does not match Makefile.sync's pinned FETCH_HEAD (${pinned_head:-unknown}); re-syncing"
       run make -f Makefile.sync checkout || return 1
     else
       log_info "llama/vendor already exists and matches pinned FETCH_HEAD; skipping checkout"
