@@ -139,13 +139,19 @@ sleep 3
 
 ## Step 4 — run
 
-The environment is not optional; four of these settings fail in ways that look like something else.
+The environment is not optional; several of these fail in ways that look like something else.
+
+`OLLAMA_FLASH_ATTENTION=1` is load-bearing and easy to miss. ollama disables flash attention by
+default, and llama sets `attn_v_trans = !flash_attn`, so with it off the V cache is stored transposed
+and the compiled decode declines it (see *Troubleshooting*). Prefill still runs compiled, so a run
+without it looks half-working rather than broken.
 
 **macOS:**
 
 ```sh
 MC=<mlir-compiler>/install
 
+OLLAMA_FLASH_ATTENTION=1 \
 TSI_MLIR_LIB=<mlir-llama.cpp>/build-ollama-drv/bin/libtsi-mlir-driver.dylib \
 TSI_MLIR_EXPORT=1 TSI_MLIR_SKIP=0 TSI_MLIR_WEIGHT_ARGS=1 \
 TSI_MLIR_DIR=/tmp/tsi-artifacts USER_DRAM_SIZE=2048 TSI_NUM_TXES=1 \
@@ -163,6 +169,7 @@ sleep 3
 MC=<mlir-compiler>/install
 
 env -u LD_LIBRARY_PATH \
+  OLLAMA_FLASH_ATTENTION=1 \
   TSI_MLIR_LIB=<mlir-llama.cpp>/build-ollama-drv/bin/libtsi-mlir-driver.so \
   TSI_MLIR_EXPORT=1 TSI_MLIR_SKIP=0 TSI_MLIR_WEIGHT_ARGS=1 \
   TSI_MLIR_DIR=/tmp/tsi-artifacts USER_DRAM_SIZE=2048 TSI_NUM_TXES=1 \
@@ -232,6 +239,7 @@ A healthy first run looks like:
 | `USER_DRAM_SIZE` | MiB | the TSI DRAM pool the KV cache is allocated from. Too small fails at `kvAlloc` with a diagnostic |
 | `TSI_NUM_TXES` | `1`..`20` | must be identical at compile and run time; the driver reports both |
 | `OMP_NUM_THREADS` | `= TSI_NUM_TXES` | multi-TXE host code is OpenMP-parallel; one thread serializes it |
+| `OLLAMA_FLASH_ATTENTION` | `1` | **required.** ollama defaults it off, and llama sets `attn_v_trans = !flash_attn`, so with it off V is cached transposed. The compiled decode aliases that buffer in place and reads one declared shape for K and V, so it declines the transposed layout. Prefill is unaffected, so the run looks half-working |
 | `OLLAMA_NUM_PARALLEL` | `1` | graph reconstruction handles one stream; more adds an `n_stream` dimension the driver declines |
 | `OLLAMA_LOAD_TIMEOUT` | `30m` | compilation emits no progress events and the default stall timeout is 5 minutes |
 
@@ -258,6 +266,7 @@ invocation. Until then, prefer unquantized GGUFs on this path.
 | `libtxe-ffm-cpp-native.so: cannot open shared object file`, then `SIGABRT` | the TXE kernel libraries are not on the loader path. They live in `<install>/<component>/lib`, not `<install>/lib` |
 | `timed out waiting for llama runner to start - progress 1.00` | graph compilation during load; raise `OLLAMA_LOAD_TIMEOUT` |
 | Correct output, no phase markers at all | the driver never ran. Check `TSI_MLIR_SKIP=0`, `TSI_HOST_GGML_DIR`, and that `TSI_MLIR_LIB` points at a driver that actually loaded |
+| `decode SKIPPED: V cache is transposed` | `OLLAMA_FLASH_ATTENTION` is unset or 0. Set it to 1. Without it only prefill runs compiled |
 | `phase=decode` appears but no `decode step` lines | the decode graph was recognized and then not executed compiled. `decode graph: N nodes, pos P` marks recognition; look for a `decode expects one cell` or similar line after it |
 | Every graph `NOT EXPORTING ... offloaded (non-host) memory` | weights are not host-readable. Quantized model without repacking off, or GPU offload |
 

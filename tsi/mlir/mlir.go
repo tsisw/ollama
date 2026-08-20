@@ -16,8 +16,8 @@
 // At runtime, point TSI_MLIR_LIB at libtsi-mlir-driver and set TSI_MLIR_EXPORT=1. With the library
 // absent the loader says so once and llama computes every graph itself.
 //
-// Four things are required under ollama specifically. The first two fail silently, the last two fail
-// as a hang or an abort well into a run:
+// Five things are required under ollama specifically. The first two fail silently, the next two as a
+// hang or an abort well into a run, and the last costs the whole decode phase:
 //
 //	TSI_MLIR_SKIP=0
 //	  The driver defaults to discarding the first graph, because under llama-completion the first
@@ -44,8 +44,19 @@
 //	  tsi_load_blob, after the graph has already compiled. mlir-llama.cpp's own run targets derive
 //	  this path; here it is the caller's to set.
 //
+//	OLLAMA_FLASH_ATTENTION=1
+//	  ollama defaults flash attention off, and llama sets attn_v_trans = !flash_attn, so with it off
+//	  the V cache is stored transposed: [n_kv, n_head_kv, head_dim] rather than
+//	  [head_dim, n_head_kv, n_kv]. The compiled decode aliases that buffer in place and reads one
+//	  declared shape for K and V, so it declines the transposed layout and llama computes every decode
+//	  step. Prefill is unaffected, so the run looks half-working: "running compiled prefill" appears
+//	  and every decode logs "decode SKIPPED: V cache is transposed".
+//
 // The first two failure modes produce correct output on CPU, so the only way to know the accelerator
-// ran is to check the log for "running compiled" and for the absence of "NOT EXPORTING".
+// ran is to check the log for "running compiled" and for the absence of "NOT EXPORTING". Correct
+// output is never evidence on its own: llama recomputes whatever the driver declines. Numeric
+// agreement needs TSI_MLIR_VERIFY=1, which makes the driver compare against llama's own result and
+// log "-> MATCH" or "-> DIFFER" per graph.
 package mlir
 
 // The ggml/src include paths below are load-bearing, not convenience: Loader.cpp builds the KV
