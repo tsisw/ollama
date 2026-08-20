@@ -368,6 +368,10 @@ setup_native_toolchain() {
 
 sync_and_patch_llama_vendor() {
   local force_patch="$1"
+  # Makefile.sync's own FETCH_HEAD can be a short SHA, so compare as a prefix
+  # of llama/vendor's actual HEAD rather than requiring an exact match.
+  local pinned_head
+  pinned_head="$(grep '^FETCH_HEAD=' Makefile.sync | cut -d= -f2)"
 
   if [ "${force_patch}" -eq 1 ]; then
     log_info "patch requested: syncing llama/vendor and applying TSI patch"
@@ -376,7 +380,19 @@ sync_and_patch_llama_vendor() {
     log_info "llama/vendor missing: syncing llama/vendor and applying TSI patch"
     run make -f Makefile.sync checkout || return 1
   else
-    log_info "llama/vendor already exists; skipping checkout"
+    local vendor_head
+    vendor_head="$(git -C llama/vendor rev-parse HEAD 2>/dev/null || echo "")"
+    # Bumping FETCH_HEAD and rerunning the plain build command used to
+    # silently no-op here: checkout only ran on a missing directory or an
+    # explicit "patch" argument, so an existing llama/vendor checked out at
+    # the OLD pin just kept building the stale commit. Re-checking out
+    # whenever the pin and the vendor's actual HEAD disagree closes that gap.
+    if [ -n "${pinned_head}" ] && [ -n "${vendor_head}" ] && [[ "${vendor_head}" != "${pinned_head}"* ]]; then
+      log_info "llama/vendor HEAD (${vendor_head}) does not match Makefile.sync's pinned FETCH_HEAD (${pinned_head}); re-syncing"
+      run make -f Makefile.sync checkout || return 1
+    else
+      log_info "llama/vendor already exists and matches pinned FETCH_HEAD; skipping checkout"
+    fi
   fi
 
   [ -d "llama/vendor" ] || die "llama/vendor still missing after checkout"
@@ -436,9 +452,9 @@ ensure_ggml_tsi_kernel_symlink() {
 
   [ -d "${target_path}" ] || die "llama/vendor/ggml-tsi-kernel not found (expected after invoke_llama_cpp_build): ${target_path}"
 
-  mkdir -p "$(dirname "${link_path}")"
-  rm -f "${link_path}"
-  ln -s "${target_path}" "${link_path}"
+  mkdir -p "$(dirname "${link_path}")" || die "failed to create parent dir for ggml-tsi-kernel symlink: $(dirname "${link_path}")"
+  rm -f "${link_path}" || die "failed to remove stale ggml-tsi-kernel symlink target: ${link_path}"
+  ln -s "${target_path}" "${link_path}" || die "failed to create ggml-tsi-kernel symlink: ${link_path} -> ${target_path}"
   log_info "ggml-tsi-kernel symlink ready for Tsavorite blob path resolution: ${link_path} -> ${target_path}"
 }
 
@@ -513,6 +529,25 @@ build_ollama_posix() {
   # backend .so and is not link-time visible to this statically-linked file.
   export CGO_CXXFLAGS="${PERF_DEF} ${DBG_DEFS} -DOLLAMA"
 
+  # ggml.c (ggml_new_tensor_impl, ggml_perf_accumulate) is *also* compiled a
+  # second time here, as a plain C file, by ml/backend/ggml/ggml/src/ggml.go's
+  # own cgo directives -- a separate compilation from both the CMake build
+  # above and from libggml-base.so. Cgo honors CGO_CFLAGS for .c files the
+  # same way it honors CGO_CXXFLAGS for .cpp files (see llama-context.cpp's
+  # comment above) -- CGO_CXXFLAGS alone never reaches this file since it's
+  # .c, not .cpp. Without PERF_DEF here too, this second copy of
+  # ggml_new_tensor_impl allocates struct ggml_tensor without the
+  # GGML_PERF_DETAIL-guarded perf fields (perf_runs/tsi_kernel_runs/
+  # perf_time_us/ggml_compute_backend), while every read of those same
+  # fields (from ggml_perf_accumulate in libggml-base.so, and from
+  # ggml-tsavorite.cpp) uses the larger, GGML_PERF_DETAIL-aware layout --
+  # reads land past what this copy actually allocated, into whatever tensor
+  # happens to be allocated next. Because llama-model.cpp/llama-graph.cpp
+  # are statically linked into this same binary, their real tensor-creation
+  # calls resolve to this cgo-compiled copy in preference to libggml-base.so's,
+  # so this is the copy that actually matters for every tensor in the graph.
+  export CGO_CFLAGS="${PERF_DEF} ${DBG_DEFS} -DOLLAMA"
+
   run cmake --build build-posix --config Release || return 1
 
   [ -f "build-posix/ollama" ] || die "build-posix/ollama not found after build"
@@ -553,6 +588,25 @@ build_ollama_fpga() {
   # required for the same reason: it selects the dynamic-lookup path for
   # ggml_perf_accumulate in llama-context.cpp.
   export CGO_CXXFLAGS="${PERF_DEF} ${DBG_DEFS} -DOLLAMA"
+
+  # ggml.c (ggml_new_tensor_impl, ggml_perf_accumulate) is *also* compiled a
+  # second time here, as a plain C file, by ml/backend/ggml/ggml/src/ggml.go's
+  # own cgo directives -- a separate compilation from both the CMake build
+  # above and from libggml-base.so. Cgo honors CGO_CFLAGS for .c files the
+  # same way it honors CGO_CXXFLAGS for .cpp files (see llama-context.cpp's
+  # comment above) -- CGO_CXXFLAGS alone never reaches this file since it's
+  # .c, not .cpp. Without PERF_DEF here too, this second copy of
+  # ggml_new_tensor_impl allocates struct ggml_tensor without the
+  # GGML_PERF_DETAIL-guarded perf fields (perf_runs/tsi_kernel_runs/
+  # perf_time_us/ggml_compute_backend), while every read of those same
+  # fields (from ggml_perf_accumulate in libggml-base.so, and from
+  # ggml-tsavorite.cpp) uses the larger, GGML_PERF_DETAIL-aware layout --
+  # reads land past what this copy actually allocated, into whatever tensor
+  # happens to be allocated next. Because llama-model.cpp/llama-graph.cpp
+  # are statically linked into this same binary, their real tensor-creation
+  # calls resolve to this cgo-compiled copy in preference to libggml-base.so's,
+  # so this is the copy that actually matters for every tensor in the graph.
+  export CGO_CFLAGS="${PERF_DEF} ${DBG_DEFS} -DOLLAMA"
 
   run cmake --build build-fpga --config Release || return 1
 

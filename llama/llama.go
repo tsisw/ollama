@@ -185,6 +185,16 @@ func (c *Context) PerfPrint() {
 	C.llama_perf_context_print(c.c)
 }
 
+// PerfReset zeroes this context's accumulated perf counters (context-level
+// timings and, per FIR-2239, the GGML per-op totals too). Callers that print
+// per-completion stats via PerfPrint must call this right after printing --
+// otherwise every subsequent report includes every prior request's counts on
+// top of its own, since Server.lc is one shared *Context for the server's
+// whole lifetime.
+func (c *Context) PerfReset() {
+	C.llama_perf_context_reset(c.c)
+}
+
 func (c *Context) KvCacheSeqAdd(seqId int, p0 int, p1 int, delta int) {
 	C.llama_memory_seq_add(C.llama_get_memory(c.c), C.int(seqId), C.int(p0), C.int(p1), C.int(delta))
 }
