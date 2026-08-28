@@ -670,7 +670,7 @@ update_one_tsavorite_deployment_yaml() {
   local advanced_matmul_shape_offload="false"
   local advanced_matmul_broadcast_offload="false"
   local triton_matmul_small_n_transpose_opt="false"
-  local user_dram_size_gb="8"
+  local user_dram_size_gb="16"
 
   mkdir -p "$(dirname "${deployment_yaml_path}")" || return 1
 
