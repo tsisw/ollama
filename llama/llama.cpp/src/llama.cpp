@@ -89,13 +89,40 @@ void llama_numa_init(enum ggml_numa_strategy numa) {
         }
     }
 }
+
+// ggml_backend_init_by_name("TSAVORITE", ...) allocates a fresh backend
+// instance (and runtime context) on every call -- it also resets the
+// device's op-run stats and re-acquires the device. Cache the single
+// instance created for profiling/shutdown here instead of creating (and,
+// for the profile path, leaking) a new one on every call.
+static ggml_backend_t g_tsavorite_profile_backend = nullptr;
+// TSAVORITE's .profile hook (tsi_log_profile_info) doesn't just print --
+// it also finalizes the runtime (unloads blobs, frees device state, calls
+// tsi_finalize()). Once that's run, g_tsavorite_profile_backend wraps an
+// already-torn-down context, so ggml_backend_free()'s normal teardown path
+// must not run on it again afterward.
+static bool g_tsavorite_profile_backend_finalized = false;
+
+static ggml_backend_t llama_tsavorite_backend_for_profile(void) {
+    if (!g_tsavorite_profile_backend) {
+        g_tsavorite_profile_backend = ggml_backend_init_by_name("TSAVORITE", NULL);
+    }
+    return g_tsavorite_profile_backend;
+}
+
 extern "C"
 void llama_backend_log_profile(void) {
-    ggml_backend_log_profile_info(ggml_backend_init_by_name("TSAVORITE", NULL));
+    ggml_backend_log_profile_info(llama_tsavorite_backend_for_profile());
+    g_tsavorite_profile_backend_finalized = true;
 }
 
 void llama_backend_free(void) {
-    ggml_backend_free(ggml_backend_init_by_name("TSAVORITE", NULL));
+    if (g_tsavorite_profile_backend && !g_tsavorite_profile_backend_finalized) {
+        ggml_backend_free(g_tsavorite_profile_backend);
+    }
+    // else: already finalized by the profile hook, or never created --
+    // nothing left to safely tear down, and the process is exiting anyway.
+    g_tsavorite_profile_backend = nullptr;
     ggml_quantize_free();
 }
 
@@ -128,6 +155,9 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
             model.load_hparams(ml);
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
+        }
+        if (model.arch == LLM_ARCH_CLIP) {
+            throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
         }
         try {
             model.load_vocab(ml);
@@ -319,6 +349,7 @@ struct llama_model * llama_model_load_from_splits(
         LLAMA_LOG_ERROR("%s: list of splits is empty\n", __func__);
         return nullptr;
     }
+    splits.reserve(n_paths);
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }

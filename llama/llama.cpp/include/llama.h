@@ -399,7 +399,7 @@ extern "C" {
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
 
-    // Call once at the end of the program to log profile - currently only used for MPI
+    // Call once at the end of the program to log profile
     LLAMA_API void llama_backend_log_profile(void);
 
     //optional:

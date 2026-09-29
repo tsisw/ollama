@@ -7,6 +7,7 @@
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
+#include "ggml.h"
 
 #include <map>
 #include <vector>
@@ -207,6 +208,9 @@ public:
 
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+    struct ggml_perf_totals perf_totals[GGML_OP_COUNT] = {};  // add this to llama_context
+#endif /* GGML_PERF-related flags */
 
 private:
     llm_graph_params graph_params(

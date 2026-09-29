@@ -15,7 +15,9 @@
 #include "ops.h"
 #include "ggml.h"
 
+#ifdef OLLAMA_DEBUG
 #include "ollama-debug.h"
+#endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -2186,6 +2188,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_HARDSIGMOID:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_FLOOR:
+                case GGML_UNARY_OP_CEIL:
+                case GGML_UNARY_OP_ROUND:
+                case GGML_UNARY_OP_TRUNC:
                     {
                         n_tasks = 1;
                     } break;
@@ -2887,7 +2893,35 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+        // Only the leader reads this (see the ith==0 guard below), so only the
+        // leader needs to pay for the ggml_time_us() call -- every other
+        // worker thread would otherwise read a timestamp it never uses.
+        int64_t t_start = 0;
+        if (state->ith == 0) {
+            t_start = ggml_time_us();
+        }
+#endif /* GGML_PERF-related flags */
         ggml_compute_forward(&params, node);
+
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+        // Every thread in the pool runs this same loop over cgraph->nodes,
+        // each processing its own slice of a node's data (ggml_compute_forward
+        // splits work across threads internally) -- only the leader (ith==0)
+        // should count the node as "one run", otherwise perf_runs/perf_time_us
+        // get multiplied by the thread count instead of reflecting real
+        // per-node activity.
+        if (state->ith == 0) {
+            int64_t t_end = ggml_time_us();
+            node->perf_runs++;
+            if (t_end >= t_start) {
+                node->perf_time_us += (t_end - t_start);
+            } else {
+                // Handle wraparound by assuming timer rolls over at max int64_t value
+                node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
+            }
+        }
+#endif /* GGML_PERF-related flags */
 
 #ifdef OLLAMA_DEBUG
         ollama_debug(node, true);
@@ -3569,13 +3603,17 @@ void ggml_cpu_init(void) {
 #ifdef GGML_USE_OPENMP
             //if (!getenv("OMP_WAIT_POLICY")) {
             //    // set the wait policy to active, so that OpenMP threads don't sleep
-            //    putenv("OMP_WAIT_POLICY=active");
+            //    setenv("OMP_WAIT_POLICY", "active", 0)
             //}
 
             if (!getenv("KMP_BLOCKTIME")) {
                 // set the time to wait before sleeping a thread
                 // this is less aggressive than setting the wait policy to active, but should achieve similar results in most cases
-                putenv("KMP_BLOCKTIME=200"); // 200ms
+#ifdef _WIN32
+                _putenv_s("KMP_BLOCKTIME", "200"); // 200ms
+#else
+                setenv("KMP_BLOCKTIME", "200", 0); // 200ms
+#endif
             }
 #endif
         }

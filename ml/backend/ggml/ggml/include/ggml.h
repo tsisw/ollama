@@ -345,6 +345,14 @@ extern "C" {
     GGML_NORETURN GGML_ATTRIBUTE_FORMAT(3, 4)
     GGML_API void ggml_abort(const char * file, int line, const char * fmt, ...);
 
+#if defined(GGML_PERF) ||  defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+    enum ggml_compute_backend_type {
+        GGML_COMPUTE_BACKEND_CPU=0,
+        GGML_COMPUTE_BACKEND_TSAVORITE,
+        GGML_COMPUTE_BACKEND_COUNT
+    };
+#endif /* GML_PERF-related flag */
+
     enum ggml_status {
         GGML_STATUS_ALLOC_FAILED = -2,
         GGML_STATUS_FAILED = -1,
@@ -577,6 +585,10 @@ extern "C" {
         GGML_UNARY_OP_EXP,
         GGML_UNARY_OP_GELU_ERF,
         GGML_UNARY_OP_XIELU,
+        GGML_UNARY_OP_FLOOR,
+        GGML_UNARY_OP_CEIL,
+        GGML_UNARY_OP_ROUND,
+        GGML_UNARY_OP_TRUNC,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -605,6 +617,7 @@ extern "C" {
         GGML_LOG_LEVEL_WARN  = 3,
         GGML_LOG_LEVEL_ERROR = 4,
         GGML_LOG_LEVEL_CONT  = 5, // continue previous log
+        GGML_LOG_LEVEL_TSAVORITE  = 42,
     };
 
     // this tensor...
@@ -654,7 +667,15 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+        int64_t perf_runs;
+        int64_t tsi_kernel_runs;
+        int64_t perf_time_us;
+        enum ggml_compute_backend_type ggml_compute_backend;
+        char padding[12];
+#else
         char padding[8];
+#endif /* GML_PERF-related flag */
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -1150,6 +1171,46 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_exp_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_floor(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_floor_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_ceil(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_ceil_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_round(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_round_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+     /**
+     * Truncates the fractional part of each element in the tensor (towards zero).
+     * For example: trunc(3.7) = 3.0, trunc(-2.9) = -2.0
+     * Similar to std::trunc in C/C++.
+     */
+
+    GGML_API struct ggml_tensor * ggml_trunc(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_trunc_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+
 
     // xIELU activation function
     // x = x * (c_a(alpha_n) + c_b(alpha_p, beta) * sigmoid(beta * x)) + eps * (x > 0)
@@ -2562,6 +2623,41 @@ extern "C" {
     GGML_API struct ggml_threadpool_params ggml_threadpool_params_default(int n_threads);
     GGML_API void                          ggml_threadpool_params_init   (struct ggml_threadpool_params * p, int n_threads);
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
+ 
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+struct ggml_perf_backend_subtotals {
+    int64_t total_us;
+    int64_t runs;
+    int64_t tsi_kernel_count;
+};
+
+struct ggml_perf_unary_subtotals {
+    int64_t total_us;
+    int64_t runs;
+    int64_t tsi_kernel_count;
+};
+// internal perf accumulation struct
+struct ggml_perf_totals {
+    int op_count;
+    int64_t total_us;
+    int64_t runs;
+    const char * op_name;
+
+    // Only used for UNARY
+    struct ggml_perf_unary_subtotals unary_subtotals[GGML_UNARY_OP_COUNT];
+    // run count per backend
+    struct ggml_perf_backend_subtotals backend_subtotals[GGML_COMPUTE_BACKEND_COUNT];
+};
+
+FILE * ggml_perf_log_open(const char *filename);
+void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp);
+
+// capture perf into totals
+void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph);
+const char * ggml_backend_type(enum ggml_compute_backend_type backend);
+
+#endif /* GML_PERF-related flags */
+void ggml_backend_cleanup();
 
 #ifdef  __cplusplus
 }

@@ -27,6 +27,10 @@
 #include <sys/sysctl.h>
 #endif
 
+#ifdef GGML_TSAVORITE
+#include "ggml-tsavorite.h"
+#endif /* GGML_TSAVORITE */
+
 
 // backend buffer type
 
@@ -246,6 +250,16 @@ void ggml_backend_free(ggml_backend_t backend) {
     }
 
     backend->iface.free(backend);
+}
+
+void ggml_backend_log_profile_info(ggml_backend_t backend) {
+    if (backend == NULL) {
+        return;
+    }
+    if (backend->iface.profile == NULL) {
+        return;
+    }
+    backend->iface.profile();
 }
 
 ggml_backend_buffer_type_t ggml_backend_get_default_buffer_type(ggml_backend_t backend) {
@@ -1009,10 +1023,15 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         int cur_backend_id = -1;
         for (int i = 0; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
+            int * node_backend_id = &tensor_backend_id(node);
             if (ggml_is_view_op(node->op)) {
+		if(node->src[0] && (sched->n_backends >= 1)) {
+	            *node_backend_id = sched->n_backends -1;
+		    node_backend_id  = &tensor_backend_id(node->src[0]); 
+	            *node_backend_id = sched->n_backends -1;
+		}
                 continue;
             }
-            int * node_backend_id = &tensor_backend_id(node);
             if (*node_backend_id != -1) {
                 if (*node_backend_id == sched->n_backends - 1) {
                     // skip cpu (lowest prio backend)
@@ -1020,9 +1039,11 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 } else {
                     cur_backend_id = *node_backend_id;
                 }
-            } else if (cur_backend_id != -1) {
-                ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
-            }
+		// Below Code is Optimization which i am disabling for now since we have not implemented other
+		// Operation at tsavorite
+            } else { 
+                ggml_backend_sched_set_if_supported(sched, node, 0, node_backend_id);
+	    }
         }
     }
     // expand gpu up
@@ -2303,3 +2324,12 @@ ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) 
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
 }
+
+void ggml_backend_cleanup()
+{
+    #ifdef GGML_TSAVORITE
+        tsi_cleanup();
+    #endif /* GGML_TSAVORITE */
+    return;
+}
+

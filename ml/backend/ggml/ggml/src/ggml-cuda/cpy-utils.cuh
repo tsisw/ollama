@@ -221,3 +221,4 @@ static __device__ void cpy_1_i32_i32(const char * cxi, char * cdsti) {
     int32_t * dst = (int32_t *)cdsti;
     *dst = *src;
 }
+

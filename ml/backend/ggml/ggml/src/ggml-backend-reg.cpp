@@ -37,6 +37,10 @@
 #include "ggml-metal.h"
 #endif
 
+#ifdef GGML_USE_TSAVORITE
+#include "ggml-tsavorite.h"
+#endif
+
 #ifdef GGML_USE_SYCL
 #include "ggml-sycl.h"
 #endif
@@ -55,6 +59,10 @@
 
 #ifdef GGML_USE_OPENCL
 #include "ggml-opencl.h"
+#endif
+
+#ifdef GGML_USE_HEXAGON
+#include "ggml-hexagon.h"
 #endif
 
 #ifdef GGML_USE_BLAS
@@ -196,6 +204,11 @@ struct ggml_backend_registry {
 #ifdef GGML_USE_METAL
         register_backend(ggml_backend_metal_reg());
 #endif
+
+#ifdef GGML_USE_TSAVORITE
+        register_backend(ggml_backend_tsavorite_reg());
+#endif
+
 #ifdef GGML_USE_SYCL
         register_backend(ggml_backend_sycl_reg());
 #endif
@@ -210,6 +223,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());
+#endif
+#ifdef GGML_USE_HEXAGON
+        register_backend(ggml_backend_hexagon_reg());
 #endif
 #ifdef GGML_USE_CANN
         register_backend(ggml_backend_cann_reg());
@@ -606,7 +622,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     bool silent = false;
 #endif
 
-    ggml_backend_load_best("blas", silent, dir_path);
+/*    ggml_backend_load_best("blas", silent, dir_path);
     ggml_backend_load_best("cann", silent, dir_path);
     ggml_backend_load_best("cuda", silent, dir_path);
     ggml_backend_load_best("hip", silent, dir_path);
@@ -615,8 +631,16 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
     ggml_backend_load_best("opencl", silent, dir_path);
-    ggml_backend_load_best("musa", silent, dir_path);
+    ggml_backend_load_best("hexagon", silent, dir_path);
+    ggml_backend_load_best("musa", silent, dir_path);*/
     ggml_backend_load_best("cpu", silent, dir_path);
+    //ggml_backend_load_best("tsavorite", silent, dir_path);
+    // Construct full path for libggml-tsavorite.so
+    std::string tsavorite_path = std::string(dir_path) + "/libggml-tsavorite.so";
+
+    // Call ggml_backend_load with the full path
+    ggml_backend_load(tsavorite_path.c_str());
+
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend
     const char * backend_path = std::getenv("GGML_BACKEND_PATH");
     if (backend_path) {

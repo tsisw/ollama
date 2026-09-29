@@ -7941,7 +7941,7 @@ void ggml_compute_forward_argsort(
             } break;
         case GGML_TYPE_I32:
             {
-                ggml_compute_forward_argsort_i32(params, dst);
+               ggml_compute_forward_argsort_i32(params, dst);
             } break;
         default:
             {
@@ -9035,6 +9035,22 @@ void ggml_compute_forward_unary(
         case GGML_UNARY_OP_EXP:
             {
                 ggml_compute_forward_exp(params, dst);
+            } break;
+        case GGML_UNARY_OP_FLOOR:
+            {
+                ggml_compute_forward_floor(params, dst);
+            } break;
+        case GGML_UNARY_OP_CEIL:
+            {
+                ggml_compute_forward_ceil(params, dst);
+            } break;
+        case GGML_UNARY_OP_ROUND:
+            {
+                ggml_compute_forward_round(params, dst);
+            } break;
+        case GGML_UNARY_OP_TRUNC:
+            {
+                ggml_compute_forward_trunc(params, dst);
             } break;
         case GGML_UNARY_OP_XIELU:
             {

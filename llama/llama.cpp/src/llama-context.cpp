@@ -1,5 +1,9 @@
 #include "llama-context.h"
 
+#ifdef OLLAMA
+#include "ggml-backend.h"
+#endif
+
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -7,6 +11,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 
+#include <atomic>
 #include <cinttypes>
 #include <cstring>
 #include <limits>
@@ -955,6 +960,93 @@ int llama_context::encode(const llama_batch & batch_inp) {
     return 0;
 }
 
+#ifdef OLLAMA
+// Ollama statically links this file into its Go binary while the ggml core
+// (where these ggml_perf_*/ggml_backend_type functions are defined) is built
+// into a separately dlopen'd backend shared library, so the symbols are not
+// link-time visible here. Resolve each one once, dynamically, through
+// whichever loaded backend exports it (they're all backend-agnostic).
+static void * llama_resolve_ggml_proc_address(const char * name) {
+    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
+        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+        void * addr = ggml_backend_reg_get_proc_address(reg, name);
+        if (addr) {
+            return addr;
+        }
+    }
+    return nullptr;
+}
+
+typedef void (*ggml_perf_accumulate_t)(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph);
+typedef FILE * (*ggml_perf_log_open_t)(const char * filename);
+typedef void (*ggml_perf_write_detailed_csv_t)(struct ggml_cgraph * cgraph, FILE * fp);
+typedef const char * (*ggml_backend_type_t)(enum ggml_compute_backend_type backend);
+
+// Note: each lookup below retries (rather than permanently caching a null
+// result) since backends can register with the reg after the first call.
+// The cache itself is an atomic (not a plain static pointer) because
+// decode() can run concurrently for these -- an unsynchronized read/write
+// of a non-atomic function-local static from multiple threads is a data
+// race even though every writer would store the same resolved value.
+static void llama_perf_ggml_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph) {
+    static std::atomic<ggml_perf_accumulate_t> cached_fn{nullptr};
+    ggml_perf_accumulate_t fn = cached_fn.load(std::memory_order_relaxed);
+    if (!fn) {
+        fn = reinterpret_cast<ggml_perf_accumulate_t>(llama_resolve_ggml_proc_address("ggml_perf_accumulate"));
+        cached_fn.store(fn, std::memory_order_relaxed);
+    }
+    if (fn) {
+        fn(totals, cgraph);
+    }
+}
+
+static FILE * llama_perf_ggml_log_open(const char * filename) {
+    static std::atomic<ggml_perf_log_open_t> cached_fn{nullptr};
+    ggml_perf_log_open_t fn = cached_fn.load(std::memory_order_relaxed);
+    if (!fn) {
+        fn = reinterpret_cast<ggml_perf_log_open_t>(llama_resolve_ggml_proc_address("ggml_perf_log_open"));
+        cached_fn.store(fn, std::memory_order_relaxed);
+    }
+    return fn ? fn(filename) : nullptr;
+}
+
+static void llama_perf_ggml_write_detailed_csv(struct ggml_cgraph * cgraph, FILE * fp) {
+    static std::atomic<ggml_perf_write_detailed_csv_t> cached_fn{nullptr};
+    ggml_perf_write_detailed_csv_t fn = cached_fn.load(std::memory_order_relaxed);
+    if (!fn) {
+        fn = reinterpret_cast<ggml_perf_write_detailed_csv_t>(
+            llama_resolve_ggml_proc_address("ggml_perf_write_detailed_csv"));
+        cached_fn.store(fn, std::memory_order_relaxed);
+    }
+    if (fn) {
+        fn(cgraph, fp);
+    }
+}
+
+static const char * llama_perf_ggml_backend_type(enum ggml_compute_backend_type backend) {
+    static std::atomic<ggml_backend_type_t> cached_fn{nullptr};
+    ggml_backend_type_t fn = cached_fn.load(std::memory_order_relaxed);
+    if (!fn) {
+        fn = reinterpret_cast<ggml_backend_type_t>(llama_resolve_ggml_proc_address("ggml_backend_type"));
+        cached_fn.store(fn, std::memory_order_relaxed);
+    }
+    return fn ? fn(backend) : "UNK";
+}
+#else
+static inline void llama_perf_ggml_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph) {
+    ggml_perf_accumulate(totals, cgraph);
+}
+static inline FILE * llama_perf_ggml_log_open(const char * filename) {
+    return ggml_perf_log_open(filename);
+}
+static inline void llama_perf_ggml_write_detailed_csv(struct ggml_cgraph * cgraph, FILE * fp) {
+    ggml_perf_write_detailed_csv(cgraph, fp);
+}
+static inline const char * llama_perf_ggml_backend_type(enum ggml_compute_backend_type backend) {
+    return ggml_backend_type(backend);
+}
+#endif
+
 int llama_context::decode(const llama_batch & batch_inp) {
     GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
 
@@ -1064,6 +1156,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     int64_t n_outputs_prev = 0;
 
+#ifdef GGML_PERF_DETAIL
+    static FILE * perf_all_shape_fp = nullptr;
+    static bool perf_all_shape_written_once = false;
+
+    if (!perf_all_shape_fp) {
+        perf_all_shape_fp = llama_perf_ggml_log_open("ggml_perf-all-shape.log");
+    }
+#endif /* GGML_PERF_DETAIL */
+
     do {
         const auto & ubatch = mctx->get_ubatch();
 
@@ -1085,6 +1186,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         ggml_status status;
         const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE)
+    if (res) {
+        llama_perf_ggml_accumulate(perf_totals, res->get_gf());
+    }
+#elif defined(GGML_PERF_DETAIL)
+    if (res) {
+        if (!perf_all_shape_written_once && perf_all_shape_fp) {
+            llama_perf_ggml_write_detailed_csv(res->get_gf(), perf_all_shape_fp);
+            fflush(perf_all_shape_fp);
+            perf_all_shape_written_once = true;
+        } 
+        llama_perf_ggml_accumulate(perf_totals, res->get_gf());
+    } 
+#endif /* GML_PERF-related flags */
+
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2024,6 +2141,16 @@ void llama_context::perf_reset() {
     t_eval_us   = n_eval = 0;
     t_p_eval_us = n_p_eval = 0;
     n_reused    = 0;
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+    // perf_totals was added to llama_context after this function was written
+    // and never got wired in here, so callers resetting perf state via this
+    // function (e.g. ollama's per-completion PerfPrint/reset) left the GGML
+    // per-op totals accumulating across every reset, unlike every other
+    // field this function resets.
+    for (auto & t : perf_totals) {
+        t = {};
+    }
+#endif /* GGML_PERF-related flags */
 }
 
 std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context::memory_breakdown() const {
@@ -2345,7 +2472,8 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    if (params.pooling_type != model->hparams.pooling_type) {
+    if (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED &&
+        params.pooling_type != model->hparams.pooling_type) {
         //user-specified pooling-type is different from the model default
         LLAMA_LOG_WARN("%s: model default pooling_type is [%d], but [%d] was specified\n", __func__,
                        model->hparams.pooling_type, params.pooling_type);
@@ -2767,18 +2895,112 @@ llama_perf_context_data llama_perf_context(const llama_context * ctx) {
     return data;
 }
 
+
+#if defined(GGML_PERF_RELEASE)
+void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
+    LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
+    LLAMA_LOG_TSAVORITE("  %-16s  %7s  %14s  %16s\n", "Op", "Runs", "Total us", "Avg us");
+
+    for (int i = 0; i < GGML_OP_COUNT; ++i) {
+        if (totals[i].runs > 0) {
+            LLAMA_LOG_TSAVORITE("  %-16s  %7ld  %14ld  %16.2f\n",
+                totals[i].op_name ? totals[i].op_name : "UNKNOWN",
+                totals[i].runs,
+                totals[i].total_us,
+                (double)totals[i].total_us / totals[i].runs);
+        }
+
+        // Unary sub-op breakdown
+        if (i == GGML_OP_UNARY) {
+            for (int j = 0; j < GGML_UNARY_OP_COUNT; ++j) {
+                if (totals[i].unary_subtotals[j].runs > 0) {
+                    LLAMA_LOG_TSAVORITE("    -> %-11s  %7ld  %14ld  %16.2f\n",
+                        ggml_unary_op_name((enum ggml_unary_op) j),
+                        totals[i].unary_subtotals[j].runs,
+                        totals[i].unary_subtotals[j].total_us,
+                        (double)totals[i].unary_subtotals[j].total_us / totals[i].unary_subtotals[j].runs);
+                }
+            }
+        }
+    }
+}
+
+#elif defined(GGML_PERF) || defined(GGML_PERF_DETAIL)
+void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
+    LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
+    LLAMA_LOG_TSAVORITE("  %-16s %-8s %7s  %14s  %16s  %16s\n", "Op", "Target", "Runs", "TSI_KERNEL-RUN", "Total us", "Avg us");
+
+    for (int i = 0; i < GGML_OP_COUNT; ++i) {
+        if (totals[i].runs > 0) {
+            for (int b = 0; b < GGML_COMPUTE_BACKEND_COUNT; ++b) {
+                if (totals[i].backend_subtotals[b].runs > 0) {
+                    const char *backend_name = llama_perf_ggml_backend_type((enum ggml_compute_backend_type) b);
+                    char padded_backend[7] = {0}; // 6 chars + null terminator
+                    snprintf(padded_backend, sizeof(padded_backend), "%-6s", backend_name);
+
+                    LLAMA_LOG_TSAVORITE("  %-16s %-8s %7ld  %14ld  %16ld  %16.2f\n",
+                        totals[i].op_name ? totals[i].op_name : "UNKNOWN",
+                        padded_backend,
+                        totals[i].backend_subtotals[b].runs,
+                        totals[i].backend_subtotals[b].tsi_kernel_count,
+                        totals[i].backend_subtotals[b].total_us,
+                        (double)totals[i].backend_subtotals[b].total_us / totals[i].backend_subtotals[b].runs);
+                }
+            }
+
+            // Unary sub-op breakdown
+            if (i == GGML_OP_UNARY) {
+                for (int j = 0; j < GGML_UNARY_OP_COUNT; ++j) {
+                    if (totals[i].unary_subtotals[j].runs > 0) {
+                        // Find backend for unary op (assumes same as parent op)
+                        const char *backend_name = NULL;
+                        for (int b = 0; b < GGML_COMPUTE_BACKEND_COUNT; ++b) {
+                            if (totals[i].backend_subtotals[b].runs > 0) {
+                                backend_name = llama_perf_ggml_backend_type((enum ggml_compute_backend_type) b);
+                                break;
+                            }
+                        }
+
+                        char padded_backend[7] = {0};
+                        snprintf(padded_backend, sizeof(padded_backend), "%-6s", backend_name ? backend_name : "UNK");
+
+                        LLAMA_LOG_TSAVORITE("    -> %-11s %-8s %7ld  %14ld  %16ld  %16.2f\n",
+                            ggml_unary_op_name((enum ggml_unary_op) j),
+                            padded_backend,
+                            totals[i].unary_subtotals[j].runs,
+                            totals[i].unary_subtotals[j].tsi_kernel_count,
+                            totals[i].unary_subtotals[j].total_us,
+                            (double)totals[i].unary_subtotals[j].total_us / totals[i].unary_subtotals[j].runs);
+                    }
+                }
+            }
+        }
+    }
+}
+#endif /* GGML_PERF-related flags */
+
+
 void llama_perf_context_print(const llama_context * ctx) {
     const auto data = llama_perf_context(ctx);
 
     const double t_end_ms = 1e-3 * ggml_time_us();
-
-    LLAMA_LOG_INFO("%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
+    LLAMA_LOG_INFO("\n%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
     LLAMA_LOG_INFO("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
             __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
     LLAMA_LOG_INFO("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
-    LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
+
+#if defined(GGML_PERF) || defined(GGML_PERF_RELEASE) || defined(GGML_PERF_DETAIL)
+    LLAMA_LOG_TSAVORITE("\n%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
+    LLAMA_LOG_TSAVORITE("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+            __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
+    LLAMA_LOG_TSAVORITE("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+            __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
+    LLAMA_LOG_TSAVORITE("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
+
+    ggml_perf_print_totals(const_cast<ggml_perf_totals *>(ctx->perf_totals));
+#endif /* GGML_PERF-related flags */
 }
 
 void llama_perf_context_reset(llama_context * ctx) {

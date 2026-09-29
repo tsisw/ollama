@@ -124,15 +124,14 @@ extern "C" {
         // (optional) sort/optimize the nodes in the graph
         void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
 
-        // (optional) reserves intermediate buffers needed for the compution
-        // if alloc is true, memory is actually allocated, otherwise the required amount is just returned by buffer_size
-        enum ggml_status          (*graph_reserve)     (ggml_backend_t backend, struct ggml_cgraph * cgraph, bool alloc);
-
-        // (optional) returns the memory needed after calling graph_reserve
-        size_t                    (*buffer_size)       (ggml_backend_t backend);
-
-        // (optional) frees memory from intermediate buffers that was allocated either by graph_compute or graph_reserve
-        void                      (*reset)             (ggml_backend_t backend);
+        // (optional) reserve a graph without allocating (used by ollama)
+        enum ggml_status          (*graph_reserve)      (ggml_backend_t backend, struct ggml_cgraph * cgraph, bool alloc);
+        // (optional) report backend-specific buffer size (used by ollama)
+        size_t                    (*buffer_size)        (ggml_backend_t backend);
+        // (optional) reset backend state (used by ollama)
+        void                      (*reset)              (ggml_backend_t backend);
+        // (optional) print backend-specific profiling info
+        void                      (*profile)            ();
     };
 
     struct ggml_backend {
