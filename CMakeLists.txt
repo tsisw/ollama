@@ -143,6 +143,19 @@ if (GGML_TSAVORITE)
     include_directories(${TSAVORITE_INCLUDE_DIR})
     include_directories(${MLIR_COMPILER_DIR}/include/tsi-rt/shim)
     include_directories(${RUNTIME_DIR}/include)
+    # HostShimCAPI.h (and other tsi-rt/shim headers) live one level deeper,
+    # at ${RUNTIME_DIR}/include/tsi-rt/shim. Some SDKs also duplicate a copy
+    # under ${MLIR_COMPILER_DIR}/include/tsi-rt/shim (added above), which is
+    # what made the bare `#include "HostShimCAPI.h"` in
+    # ggml-tsavorite/include/TestModel.h resolve previously -- but that
+    # duplication isn't guaranteed (dropped starting with SDK 0.6.4's
+    # compiler package layout), so add the runtime package's own shim dir
+    # directly rather than relying on the compiler package to re-export it.
+    # Mirrors the same fix in tsisw/llama.cpp's own CMakeLists.txt (PR #167)
+    # -- this is Ollama's own, independent copy of the same include logic
+    # (used to build ml/backend/ggml/ggml, the rsynced ggml source tree),
+    # so it needs the identical fix applied here too.
+    include_directories(${RUNTIME_DIR}/include/tsi-rt/shim)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ml/backend/ggml/ggml/src/ggml-tsavorite/include)
     include_directories(${MLIR_COMPILER_DIR}/../toolbox/build/install-fpga/include)
     message("tsavorite backend is enabled")
